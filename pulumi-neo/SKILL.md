@@ -24,28 +24,54 @@ pulumi org get-default
 
 If `pulumi org get-default` returns an error or shows a non-cloud backend, prompt the user for their Pulumi Cloud organization name.
 
-## Using the Python Script
+## Using with Claude Code
 
-The included script handles Neo task creation and polling:
+For Claude Code integration, use `--no-poll` to avoid blocking and `--get-events` to fetch updates:
 
 ```bash
-# Create a task and poll for updates
+# Step 1: Create task (returns immediately)
+python scripts/neo_task.py --org <org> --message "Analyze my infrastructure" --no-poll
+
+# Step 2: Check for updates (non-blocking)
+python scripts/neo_task.py --org <org> --task-id <task-id> --get-events
+
+# JSON output for programmatic use
+python scripts/neo_task.py --org <org> --message "Analyze this" --no-poll --json
+```
+
+**If Pulumi MCP tools are available**, prefer using them directly:
+- `mcp__pulumi__neo-bridge` - Create and interact with Neo tasks
+- `mcp__pulumi__neo-get-tasks` - List existing tasks
+- `mcp__pulumi__neo-continue-task` - Continue polling a task
+
+## Using the Python Script
+
+The script handles Neo task creation, polling, and management:
+
+```bash
+# Create a task and poll for updates (interactive/terminal use)
 python scripts/neo_task.py --org <org-name> --message "Help me optimize my Pulumi stack"
+
+# Create task without polling (CI/CD or programmatic use)
+python scripts/neo_task.py --org <org-name> --message "Analyze this" --no-poll
 
 # Create task with stack context
 python scripts/neo_task.py --org <org-name> \
   --message "Analyze this stack" \
-  --stack-name prod --stack-project my-infra
+  --stack-name prod --stack-project my-infra --no-poll
 
 # Create task with repository context
 python scripts/neo_task.py --org <org-name> \
   --message "Review this infrastructure code" \
-  --repo-name my-repo --repo-org my-github-org --repo-forge github
+  --repo-name my-repo --repo-org my-github-org --no-poll
 
 # List existing tasks
 python scripts/neo_task.py --org <org-name> --list
 
-# Continue polling an existing task
+# Fetch current events (single request, no polling)
+python scripts/neo_task.py --org <org-name> --task-id <task-id> --get-events
+
+# Poll an existing task for updates (interactive)
 python scripts/neo_task.py --org <org-name> --task-id <task-id>
 
 # Send approval for a pending request
