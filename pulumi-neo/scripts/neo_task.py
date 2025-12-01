@@ -295,28 +295,33 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Create a new task
+  # Create a new task (with polling)
   %(prog)s --org myorg --message "Analyze my infrastructure"
+
+  # Create task without polling (returns immediately - best for Claude Code)
+  %(prog)s --org myorg --message "Analyze my infrastructure" --no-poll
+
+  # Create task with JSON output (best for programmatic use)
+  %(prog)s --org myorg --message "Analyze this" --no-poll --json
 
   # Create task with stack context
   %(prog)s --org myorg --message "Optimize this stack" \\
-    --stack-name prod --stack-project my-infra
-
-  # Create task with repository context
-  %(prog)s --org myorg --message "Review this code" \\
-    --repo-name my-repo --repo-org my-github-org
+    --stack-name prod --stack-project my-infra --no-poll
 
   # List tasks
   %(prog)s --org myorg --list
 
-  # Poll an existing task
-  %(prog)s --org myorg --task-id task_abc123
+  # Get current events for a task (single fetch, no polling)
+  %(prog)s --org myorg --task-id TASK_ID --get-events
+
+  # Poll an existing task for updates
+  %(prog)s --org myorg --task-id TASK_ID
 
   # Approve a pending request
-  %(prog)s --org myorg --task-id task_abc123 --approve
+  %(prog)s --org myorg --task-id TASK_ID --approve
 
   # Cancel a pending request
-  %(prog)s --org myorg --task-id task_abc123 --cancel
+  %(prog)s --org myorg --task-id TASK_ID --cancel
 """,
     )
 
@@ -389,6 +394,21 @@ Examples:
         default=600,
         help="Maximum seconds to wait (default: 600)",
     )
+    parser.add_argument(
+        "--no-poll",
+        action="store_true",
+        help="Create task and return immediately without polling (useful for CI/CD or Claude Code)",
+    )
+    parser.add_argument(
+        "--get-events",
+        action="store_true",
+        help="Fetch and display current events once without polling",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON (useful for programmatic use)",
+    )
 
     args = parser.parse_args()
 
@@ -409,13 +429,33 @@ Examples:
     # Handle list command
     if args.list:
         tasks = list_tasks(org)
-        if not tasks:
+        if args.json:
+            print(json.dumps({"tasks": tasks}, indent=2))
+        elif not tasks:
             print("No tasks found.")
         else:
-            print(f"{'ID':<30} {'Status':<20} {'Created'}")
-            print("-" * 70)
+            print(f"{'ID':<40} {'Status':<15} {'Created'}")
+            print("-" * 80)
             for task in tasks:
-                print(f"{task.get('id', 'N/A'):<30} {task.get('status', 'N/A'):<20} {task.get('createdAt', 'N/A')}")
+                print(f"{task.get('id', 'N/A'):<40} {task.get('status', 'N/A'):<15} {task.get('createdAt', 'N/A')}")
+        return
+
+    # Handle get-events command (single fetch, no polling)
+    if args.get_events:
+        if not args.task_id:
+            print("Error: --task-id required for --get-events")
+            sys.exit(1)
+        task = get_task(org, args.task_id)
+        events, _ = get_events(org, args.task_id)
+        if args.json:
+            print(json.dumps({"task": task, "events": events}, indent=2))
+        else:
+            print(f"Task: {args.task_id}")
+            print(f"Status: {task.get('status', 'unknown')}")
+            print(f"Console: https://app.pulumi.com/{org}/neo/{args.task_id}")
+            print("-" * 60)
+            for event in events:
+                print(format_event(event))
         return
 
     # Handle approval/cancel
@@ -487,8 +527,21 @@ Examples:
             repo_org=args.repo_org,
             repo_forge=args.repo_forge,
         )
-        print(f"Created task: {task_id}")
-        poll_task(org, task_id, args.poll_interval, args.max_wait)
+
+        console_url = f"https://app.pulumi.com/{org}/neo/{task_id}"
+
+        if args.json:
+            print(json.dumps({
+                "taskId": task_id,
+                "consoleUrl": console_url,
+                "org": org,
+            }, indent=2))
+        else:
+            print(f"Created task: {task_id}")
+            print(f"Console: {console_url}")
+
+        if not args.no_poll:
+            poll_task(org, task_id, args.poll_interval, args.max_wait)
         return
 
     # No action specified
