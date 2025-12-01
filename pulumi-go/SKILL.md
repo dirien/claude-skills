@@ -5,16 +5,6 @@ description: Pulumi infrastructure as code using Go with Pulumi Cloud and ESC in
 
 # Pulumi Go Skill
 
-This skill provides guidance for Pulumi infrastructure as code development using Go, with a focus on Pulumi Cloud and Pulumi ESC (Environments, Secrets, and Configuration).
-
-## When to Use This Skill
-
-- Creating or modifying Pulumi Go projects
-- Working with `main.go`, `Pulumi.yaml`, or `go.mod` files containing Pulumi imports
-- Integrating Pulumi ESC for secrets and configuration management
-- Setting up OIDC authentication with cloud providers
-- Managing multi-stack deployments with stack references
-
 ## Development Workflow
 
 ### 1. Project Setup

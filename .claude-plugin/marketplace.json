@@ -1,0 +1,49 @@
+{
+  "name": "pulumi-skills",
+  "owner": {
+    "name": "Pulumi",
+    "email": "support@pulumi.com"
+  },
+  "metadata": {
+    "description": "Pulumi infrastructure as code skills for Claude Code",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "pulumi-typescript",
+      "source": "./pulumi-typescript",
+      "description": "Pulumi infrastructure as code using TypeScript with Pulumi Cloud and ESC integration. Use when working with Pulumi TypeScript projects, ESC environments, dynamic secrets, OIDC credentials, or infrastructure automation with Node.js/TypeScript.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Pulumi"
+      },
+      "category": "infrastructure",
+      "tags": ["pulumi", "typescript", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
+      "strict": false
+    },
+    {
+      "name": "pulumi-go",
+      "source": "./pulumi-go",
+      "description": "Pulumi infrastructure as code using Go with Pulumi Cloud and ESC integration. Use when working with Pulumi Go projects, ESC environments, dynamic secrets, OIDC credentials, or infrastructure automation with Golang.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Pulumi"
+      },
+      "category": "infrastructure",
+      "tags": ["pulumi", "go", "golang", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
+      "strict": false
+    },
+    {
+      "name": "pulumi-python",
+      "source": "./pulumi-python",
+      "description": "Pulumi infrastructure as code using Python with Pulumi Cloud and ESC integration. Use when working with Pulumi Python projects, ESC environments, dynamic secrets, OIDC credentials, or infrastructure automation with Python.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Pulumi"
+      },
+      "category": "infrastructure",
+      "tags": ["pulumi", "python", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
+      "strict": false
+    }
+  ]
+}

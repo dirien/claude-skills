@@ -5,16 +5,6 @@ description: Pulumi infrastructure as code using Python with Pulumi Cloud and ES
 
 # Pulumi Python Skill
 
-This skill provides guidance for Pulumi infrastructure as code development using Python, with a focus on Pulumi Cloud and Pulumi ESC (Environments, Secrets, and Configuration).
-
-## When to Use This Skill
-
-- Creating or modifying Pulumi Python projects
-- Working with `__main__.py`, `Pulumi.yaml`, or `requirements.txt`/`pyproject.toml` files containing Pulumi imports
-- Integrating Pulumi ESC for secrets and configuration management
-- Setting up OIDC authentication with cloud providers
-- Managing multi-stack deployments with stack references
-
 ## Development Workflow
 
 ### 1. Project Setup

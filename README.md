@@ -22,7 +22,21 @@ All Pulumi skills include:
 
 ## Installation
 
-### Option 1: Symlink to ~/.claude/skills (Recommended)
+### Option 1: Plugin Marketplace (Recommended)
+
+Add the marketplace and install skills:
+
+```bash
+# Add the marketplace
+/plugin marketplace add dirien/claude-skills
+
+# Install desired skills
+/plugin install pulumi-typescript@pulumi-skills
+/plugin install pulumi-go@pulumi-skills
+/plugin install pulumi-python@pulumi-skills
+```
+
+### Option 2: Symlink to ~/.claude/skills
 
 ```bash
 # Clone the repo
@@ -33,13 +47,6 @@ mkdir -p ~/.claude/skills
 ln -s $(pwd)/claude-skills/pulumi-typescript ~/.claude/skills/pulumi-typescript
 ln -s $(pwd)/claude-skills/pulumi-go ~/.claude/skills/pulumi-go
 ln -s $(pwd)/claude-skills/pulumi-python ~/.claude/skills/pulumi-python
-```
-
-### Option 2: Copy to ~/.claude/skills
-
-```bash
-git clone https://github.com/dirien/claude-skills.git
-cp -r claude-skills/pulumi-* ~/.claude/skills/
 ```
 
 ### Option 3: Project-level skills
@@ -53,7 +60,6 @@ Each skill follows this structure:
 ```
 pulumi-{language}/
 ├── SKILL.md                           # Main skill definition
-├── evaluations.md                     # Test scenarios
 └── references/
     ├── pulumi-esc.md                  # ESC patterns and commands
     ├── pulumi-patterns.md             # Infrastructure patterns
