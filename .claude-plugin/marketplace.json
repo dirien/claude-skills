@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Pulumi infrastructure as code skills for Claude Code",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "plugins": [
     {
       "name": "pulumi-skills",
       "source": "./",
       "description": "Pulumi infrastructure as code skills for Claude Code including TypeScript, Go, Python, and Neo AI agent support.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": {
         "name": "Pulumi"
       },
