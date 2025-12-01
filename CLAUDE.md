@@ -11,6 +11,7 @@ claude-skills/
 ├── pulumi-typescript/        # TypeScript Pulumi skill
 ├── pulumi-go/                # Go Pulumi skill
 ├── pulumi-python/            # Python Pulumi skill
+├── pulumi-neo/               # Pulumi Neo AI agent skill
 └── CLAUDE.md                 # This file
 ```
 
