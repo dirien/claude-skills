@@ -10,52 +10,21 @@
   },
   "plugins": [
     {
-      "name": "pulumi-typescript",
-      "source": "./pulumi-typescript",
-      "description": "Pulumi infrastructure as code using TypeScript with Pulumi Cloud and ESC integration. Use when working with Pulumi TypeScript projects, ESC environments, dynamic secrets, OIDC credentials, or infrastructure automation with Node.js/TypeScript.",
+      "name": "pulumi-skills",
+      "source": "./",
+      "description": "Pulumi infrastructure as code skills for Claude Code including TypeScript, Go, Python, and Neo AI agent support.",
       "version": "1.0.0",
       "author": {
         "name": "Pulumi"
       },
       "category": "infrastructure",
-      "tags": ["pulumi", "typescript", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
-      "strict": false
-    },
-    {
-      "name": "pulumi-go",
-      "source": "./pulumi-go",
-      "description": "Pulumi infrastructure as code using Go with Pulumi Cloud and ESC integration. Use when working with Pulumi Go projects, ESC environments, dynamic secrets, OIDC credentials, or infrastructure automation with Golang.",
-      "version": "1.0.0",
-      "author": {
-        "name": "Pulumi"
-      },
-      "category": "infrastructure",
-      "tags": ["pulumi", "go", "golang", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
-      "strict": false
-    },
-    {
-      "name": "pulumi-python",
-      "source": "./pulumi-python",
-      "description": "Pulumi infrastructure as code using Python with Pulumi Cloud and ESC integration. Use when working with Pulumi Python projects, ESC environments, dynamic secrets, OIDC credentials, or infrastructure automation with Python.",
-      "version": "1.0.0",
-      "author": {
-        "name": "Pulumi"
-      },
-      "category": "infrastructure",
-      "tags": ["pulumi", "python", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
-      "strict": false
-    },
-    {
-      "name": "pulumi-neo",
-      "source": "./pulumi-neo",
-      "description": "Pulumi Neo AI-powered infrastructure automation agent. Use when working with Pulumi Neo for conversational infrastructure management, creating Neo tasks, monitoring task progress, infrastructure analysis, maintenance operations, or automating multi-step cloud workflows through natural language.",
-      "version": "1.0.0",
-      "author": {
-        "name": "Pulumi"
-      },
-      "category": "infrastructure",
-      "tags": ["pulumi", "neo", "ai", "agent", "infrastructure-as-code", "automation", "natural-language"],
-      "strict": false
+      "tags": ["pulumi", "typescript", "go", "python", "neo", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
+      "skills": [
+        "./pulumi-typescript",
+        "./pulumi-go",
+        "./pulumi-python",
+        "./pulumi-neo"
+      ]
     }
   ]
 }
