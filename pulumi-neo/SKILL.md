@@ -24,25 +24,25 @@ pulumi org get-default
 
 If `pulumi org get-default` returns an error or shows a non-cloud backend, prompt the user for their Pulumi Cloud organization name.
 
-## Using with Claude Code
+## Claude Code Integration
 
-For Claude Code integration, use `--no-poll` to avoid blocking and `--get-events` to fetch updates:
-
-```bash
-# Step 1: Create task (returns immediately)
-python scripts/neo_task.py --org <org> --message "Analyze my infrastructure" --no-poll
-
-# Step 2: Check for updates (non-blocking)
-python scripts/neo_task.py --org <org> --task-id <task-id> --get-events
-
-# JSON output for programmatic use
-python scripts/neo_task.py --org <org> --message "Analyze this" --no-poll --json
+**RECOMMENDED: Use MCP tools directly** - they work natively with Claude Code:
+```
+mcp__pulumi__neo-bridge      # Create and interact with Neo tasks
+mcp__pulumi__neo-get-tasks   # List existing tasks
+mcp__pulumi__neo-continue-task # Continue polling a task
 ```
 
-**If Pulumi MCP tools are available**, prefer using them directly:
-- `mcp__pulumi__neo-bridge` - Create and interact with Neo tasks
-- `mcp__pulumi__neo-get-tasks` - List existing tasks
-- `mcp__pulumi__neo-continue-task` - Continue polling a task
+**If using the Python script, ALWAYS add `--no-poll`:**
+```bash
+# REQUIRED: --no-poll prevents blocking (script will hang without it)
+python scripts/neo_task.py --org <org> --message "Your message" --no-poll
+
+# Check events separately
+python scripts/neo_task.py --org <org> --task-id <task-id> --get-events
+```
+
+**WARNING:** Never run the script without `--no-poll` in Claude Code - the polling loop will block indefinitely.
 
 ## Using the Python Script
 
