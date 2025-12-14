@@ -10,19 +10,58 @@
   },
   "plugins": [
     {
-      "name": "pulumi-skills",
+      "name": "pulumi-typescript",
       "source": "./",
-      "description": "Pulumi infrastructure as code skills for Claude Code including TypeScript, Go, Python, and Neo AI agent support.",
+      "description": "Pulumi TypeScript skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
       "version": "1.1.0",
       "author": {
         "name": "Pulumi"
       },
       "category": "infrastructure",
-      "tags": ["pulumi", "typescript", "go", "python", "neo", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
+      "tags": ["pulumi", "typescript", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
       "skills": [
-        "./pulumi-typescript",
-        "./pulumi-go",
-        "./pulumi-python",
+        "./pulumi-typescript"
+      ]
+    },
+    {
+      "name": "pulumi-go",
+      "source": "./",
+      "description": "Pulumi Go skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
+      "version": "1.1.0",
+      "author": {
+        "name": "Pulumi"
+      },
+      "category": "infrastructure",
+      "tags": ["pulumi", "go", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
+      "skills": [
+        "./pulumi-go"
+      ]
+    },
+    {
+      "name": "pulumi-python",
+      "source": "./",
+      "description": "Pulumi Python skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
+      "version": "1.1.0",
+      "author": {
+        "name": "Pulumi"
+      },
+      "category": "infrastructure",
+      "tags": ["pulumi", "python", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
+      "skills": [
+        "./pulumi-python"
+      ]
+    },
+    {
+      "name": "pulumi-neo",
+      "source": "./",
+      "description": "Pulumi Neo AI agent skill for natural language infrastructure as code generation.",
+      "version": "1.1.0",
+      "author": {
+        "name": "Pulumi"
+      },
+      "category": "infrastructure",
+      "tags": ["pulumi", "neo", "ai", "infrastructure-as-code", "iac", "aws", "azure", "gcp"],
+      "skills": [
         "./pulumi-neo"
       ]
     }
