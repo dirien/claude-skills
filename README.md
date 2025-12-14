@@ -25,14 +25,17 @@ All Pulumi skills include:
 
 ### Option 1: Plugin Marketplace (Recommended)
 
-Add the marketplace and install the plugin (includes all skills):
+Add the marketplace and install individual skills:
 
 ```bash
 # Add the marketplace
 /plugin marketplace add dirien/claude-skills
 
-# Install all Pulumi skills
-/plugin install pulumi-skills@pulumi-skills
+# Install individual skills (choose one or more)
+/plugin install pulumi-typescript@pulumi-skills
+/plugin install pulumi-go@pulumi-skills
+/plugin install pulumi-python@pulumi-skills
+/plugin install pulumi-neo@pulumi-skills
 ```
 
 ### Option 2: Symlink to ~/.claude/skills

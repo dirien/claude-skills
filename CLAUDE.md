@@ -50,4 +50,7 @@ Skills are distributed via the `.claude-plugin/marketplace.json` file. Users ins
 ```bash
 /plugin marketplace add <owner>/claude-skills
 /plugin install pulumi-typescript@pulumi-skills
+/plugin install pulumi-go@pulumi-skills
+/plugin install pulumi-python@pulumi-skills
+/plugin install pulumi-neo@pulumi-skills
 ```
