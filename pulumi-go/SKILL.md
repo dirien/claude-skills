@@ -1,7 +1,7 @@
 ---
 name: pulumi-go
 description: This skill should be used when the user asks to "create Pulumi Go project", "write Pulumi Go code", "use Pulumi ESC with Go", "set up OIDC for Pulumi", or mentions Pulumi infrastructure automation with Golang.
-version: 1.2.0
+version: 1.3.0
 ---
 
 # Pulumi Go Skill
@@ -37,10 +37,10 @@ Instead of using `pulumi config set` or stack config files, use Pulumi ESC for c
 **Link ESC environment to stack:**
 ```bash
 # Create ESC environment
-esc env init myorg/myproject-dev
+pulumi env init myorg/myproject-dev
 
 # Edit environment
-esc env edit myorg/myproject-dev
+pulumi env edit myorg/myproject-dev
 
 # Link to Pulumi stack
 pulumi config env add myorg/myproject-dev
@@ -240,19 +240,19 @@ func main() {
 }
 ```
 
-### 4. Using ESC with esc run
+### 4. Using ESC with pulumi env run
 
 Run any command with ESC environment variables injected:
 
 ```bash
 # Run pulumi commands with ESC credentials
-esc run myorg/aws-dev -- pulumi up
+pulumi env run myorg/aws-dev -- pulumi up
 
 # Run tests with secrets
-esc run myorg/test-env -- go test ./...
+pulumi env run myorg/test-env -- go test ./...
 
 # Open environment and export to shell
-esc open myorg/myproject-dev --format shell
+pulumi env open myorg/myproject-dev --format shell
 ```
 
 ### 5. Error Handling Patterns
@@ -420,12 +420,12 @@ pulumi package add /path/to/local/my-component
 ## Common Commands
 
 ```bash
-# ESC Commands
-esc env init <org>/<project>/<env>    # Create environment
-esc env edit <org>/<env>              # Edit environment
-esc env get <org>/<env>               # View resolved values
-esc run <org>/<env> -- <command>      # Run with env vars
-esc env version tag <org>/<env> <tag> # Tag version
+# Environment Commands (pulumi env)
+pulumi env init <org>/<project>/<env>        # Create environment
+pulumi env edit <org>/<env>                  # Edit environment
+pulumi env open <org>/<env>                  # View resolved values
+pulumi env run <org>/<env> -- <command>      # Run with env vars
+pulumi env version tag <org>/<env> <tag>     # Tag version
 
 # Pulumi Commands
 pulumi new go                          # New project

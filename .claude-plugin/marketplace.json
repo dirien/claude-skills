@@ -9,21 +9,21 @@
       "name": "pulumi-typescript",
       "source": "./pulumi-typescript",
       "description": "Pulumi TypeScript skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "author": { "name": "Pulumi" }
     },
     {
       "name": "pulumi-go",
       "source": "./pulumi-go",
       "description": "Pulumi Go skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "author": { "name": "Pulumi" }
     },
     {
       "name": "pulumi-python",
       "source": "./pulumi-python",
       "description": "Pulumi Python skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "author": { "name": "Pulumi" }
     },
     {
