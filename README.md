@@ -10,6 +10,7 @@ Custom [Claude Code](https://claude.ai/claude-code) skills for infrastructure as
 | [pulumi-go](./pulumi-go/) | Pulumi IaC with Go, Pulumi Cloud & ESC |
 | [pulumi-python](./pulumi-python/) | Pulumi IaC with Python, Pulumi Cloud & ESC |
 | [pulumi-neo](./pulumi-neo/) | Pulumi Neo AI agent for conversational infrastructure management |
+| [pulumi-cli](./pulumi-cli/) | Pulumi CLI command reference for deployments and stack management |
 
 ## Features
 
@@ -36,6 +37,7 @@ Add the marketplace and install individual skills:
 /plugin install pulumi-go@pulumi-skills
 /plugin install pulumi-python@pulumi-skills
 /plugin install pulumi-neo@pulumi-skills
+/plugin install pulumi-cli@pulumi-skills
 ```
 
 ### Option 2: Symlink to ~/.claude/skills
@@ -50,6 +52,7 @@ ln -s $(pwd)/claude-skills/pulumi-typescript ~/.claude/skills/pulumi-typescript
 ln -s $(pwd)/claude-skills/pulumi-go ~/.claude/skills/pulumi-go
 ln -s $(pwd)/claude-skills/pulumi-python ~/.claude/skills/pulumi-python
 ln -s $(pwd)/claude-skills/pulumi-neo ~/.claude/skills/pulumi-neo
+ln -s $(pwd)/claude-skills/pulumi-cli ~/.claude/skills/pulumi-cli
 ```
 
 ### Option 3: Project-level skills
