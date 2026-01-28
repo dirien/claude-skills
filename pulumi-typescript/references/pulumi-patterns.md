@@ -76,7 +76,55 @@ pulumi.runtime.registerStackTransformation((args) => {
     }
     return { props: args.props, opts: args.opts };
 });
+
+// Enforce encryption on all S3 buckets
+pulumi.runtime.registerStackTransformation((args) => {
+    if (args.type === "aws:s3/bucket:Bucket") {
+        args.props["serverSideEncryptionConfiguration"] = {
+            rule: {
+                applyServerSideEncryptionByDefault: {
+                    sseAlgorithm: "aws:kms",
+                },
+            },
+        };
+    }
+    return { props: args.props, opts: args.opts };
+});
 ```
+
+## Resource Protection
+
+Prevent accidental deletion of critical resources:
+
+```typescript
+// Protect resource from deletion
+const db = new aws.rds.Instance("prod-db", {
+    // ... config
+}, { protect: true });
+
+// Retain resource on stack destroy (useful for data)
+const bucket = new aws.s3.Bucket("data-bucket", {
+    // ... config
+}, { retainOnDelete: true });
+```
+
+## Component Resource Pitfalls
+
+Common mistakes to avoid:
+
+1. **Forgetting `parent: this`** - Child resources won't be properly associated; deletion may fail
+2. **Skipping `registerOutputs()`** - Outputs won't be tracked; cross-stack references break
+3. **Hardcoding values** - Reduces reusability; use args interface instead
+4. **Overly complex components** - Keep components focused on single logical units
+5. **Missing input validation** - Validate args before creating resources
+
+## Stack Pitfalls
+
+1. **Hardcoding environment values** - Use configuration or ESC instead
+2. **Sharing state between environments** - Each stack should have isolated state
+3. **Circular stack references** - Design dependency graph carefully
+4. **Unprotected production resources** - Use `protect: true` for critical infra
+5. **Unencrypted secrets** - Always use `--secret` flag or ESC secrets
 
 ## Dynamic Providers
 
@@ -223,5 +271,5 @@ jobs:
 
       - name: Deploy with ESC
         run: |
-          esc run myorg/aws-prod -- pulumi up --yes
+          pulumi env run myorg/aws-prod -- pulumi up --yes
 ```

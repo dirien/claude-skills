@@ -1,6 +1,7 @@
 ---
 name: pulumi-typescript
-description: Pulumi infrastructure as code using TypeScript with Pulumi Cloud and ESC integration. Use when working with Pulumi TypeScript projects, ESC environments, dynamic secrets, OIDC credentials, or infrastructure automation with Node.js/TypeScript.
+description: This skill should be used when the user asks to "create Pulumi TypeScript project", "write Pulumi TypeScript code", "use Pulumi ESC with TypeScript", "set up OIDC for Pulumi", or mentions Pulumi infrastructure automation with Node.js/TypeScript.
+version: 1.1.0
 ---
 
 # Pulumi TypeScript Skill

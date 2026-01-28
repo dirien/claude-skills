@@ -1,6 +1,7 @@
 ---
 name: pulumi-go
-description: Pulumi infrastructure as code using Go with Pulumi Cloud and ESC integration. Use when working with Pulumi Go projects, ESC environments, dynamic secrets, OIDC credentials, or infrastructure automation with Golang.
+description: This skill should be used when the user asks to "create Pulumi Go project", "write Pulumi Go code", "use Pulumi ESC with Go", "set up OIDC for Pulumi", or mentions Pulumi infrastructure automation with Golang.
+version: 1.1.0
 ---
 
 # Pulumi Go Skill

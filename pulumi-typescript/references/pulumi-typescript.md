@@ -123,8 +123,32 @@ const resource = new aws.s3.Bucket("bucket", {}, {
         update: "30m",
         delete: "30m",
     },
+
+    // Force replacement when specific properties change
+    replaceOnChanges: ["tags.Environment"],
+
+    // Skip delete when parent resource is deleted (useful for Kubernetes)
+    deletedWith: parentResource,
 });
 ```
+
+### Resource Hooks
+
+```typescript
+// Define lifecycle hooks for custom logic
+const resource = new aws.s3.Bucket("bucket", {}, {
+    hooks: {
+        beforeCreate: async (args) => {
+            console.log(`Creating resource: ${args.urn}`);
+        },
+        afterCreate: async (args) => {
+            console.log(`Created with outputs: ${JSON.stringify(args.outputs)}`);
+        },
+    },
+});
+```
+
+> **Note:** Hooks require `--run-program` flag when running `pulumi destroy`. Not supported in YAML.
 
 ### Provider Configuration
 

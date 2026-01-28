@@ -1,6 +1,7 @@
 ---
 name: pulumi-python
-description: Pulumi infrastructure as code using Python with Pulumi Cloud and ESC integration. Use when working with Pulumi Python projects, ESC environments, dynamic secrets, OIDC credentials, or infrastructure automation with Python.
+description: This skill should be used when the user asks to "create Pulumi Python project", "write Pulumi Python code", "use Pulumi ESC with Python", "set up OIDC for Pulumi", or mentions Pulumi infrastructure automation with Python.
+version: 1.1.0
 ---
 
 # Pulumi Python Skill

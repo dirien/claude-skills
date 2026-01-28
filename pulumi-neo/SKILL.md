@@ -1,6 +1,7 @@
 ---
 name: pulumi-neo
-description: Pulumi Neo AI-powered infrastructure automation agent. Use when working with Pulumi Neo for conversational infrastructure management, creating Neo tasks, monitoring task progress, infrastructure analysis, maintenance operations, or automating multi-step cloud workflows through natural language.
+description: This skill should be used when the user asks to "create Neo task", "use Pulumi Neo", "analyze infrastructure with Neo", "automate infrastructure with AI", or mentions conversational infrastructure management through natural language.
+version: 1.1.0
 ---
 
 # Pulumi Neo Skill
@@ -107,20 +108,22 @@ Provide context to Neo by attaching entities:
 
 | Status | Description |
 |--------|-------------|
-| `pending` | Task is queued |
-| `running` | Neo is processing the task |
-| `waiting_for_approval` | Neo needs user confirmation to proceed |
-| `completed` | Task finished successfully |
-| `failed` | Task encountered an error |
+| `running` | Neo is actively processing the task |
+| `idle` | Task is waiting for input or has finished processing |
+
+**Note:** Task completion and approval requests are determined by examining events, not task status.
 
 ### 4. Approval Flow
 
 When Neo requires confirmation for an operation:
 
-1. Task status changes to `waiting_for_approval`
-2. Event contains `approval_request_id`
-3. User reviews the proposed changes
-4. Send approval or cancellation via the API
+1. Task status remains `running` or transitions to `idle`
+2. An `agentResponse` event contains `tool_calls` with an `approval_request` tool
+3. The `approval_request_id` is found in the tool call parameters
+4. User reviews the proposed changes
+5. Send approval or cancellation via the API
+
+**Detecting approvals:** Check events for `eventBody.tool_calls` containing approval requests rather than relying on task status.
 
 ## Common Workflows
 

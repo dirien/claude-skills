@@ -4,77 +4,77 @@
 
 Pulumi ESC (Environments, Secrets, and Configuration) provides centralized secrets management and orchestration for infrastructure and applications.
 
-## ESC CLI Commands
+## Pulumi ESC Commands
 
 ### Environment Management
 
 ```bash
 # Create environment
-esc env init <org>/<project>/<env>
-esc env init myorg/myproject/dev
+pulumi env init <org>/<project>/<env>
+pulumi env init myorg/myproject/dev
 
 # List environments
-esc env ls
-esc env ls myorg
+pulumi env ls
+pulumi env ls myorg
 
 # Edit environment (opens editor)
-esc env edit <org>/<env>
+pulumi env edit <org>/<env>
 
 # View environment definition
-esc env get <org>/<env> --show-secrets
+pulumi env get <org>/<env> --show-secrets
 
 # Delete environment
-esc env rm <org>/<env>
+pulumi env rm <org>/<env>
 
 # Clone environment
-esc env clone <org>/<source> <org>/<target>
+pulumi env clone <org>/<source> <org>/<target>
 ```
 
 ### Working with Values
 
 ```bash
 # Set a value
-esc env set <org>/<env> <path> <value>
-esc env set myorg/dev pulumiConfig.aws:region us-west-2
+pulumi env set <org>/<env> <path> <value>
+pulumi env set myorg/dev pulumiConfig.aws:region us-west-2
 
 # Set a secret
-esc env set <org>/<env> <path> <value> --secret
+pulumi env set <org>/<env> <path> <value> --secret
 
 # Get a specific value
-esc env get <org>/<env> <path>
-esc env get myorg/dev pulumiConfig.aws:region
+pulumi env get <org>/<env> <path>
+pulumi env get myorg/dev pulumiConfig.aws:region
 ```
 
 ### Running Commands
 
 ```bash
 # Run command with environment
-esc run <org>/<env> -- <command>
-esc run myorg/aws-dev -- pulumi up
-esc run myorg/aws-dev -- aws s3 ls
+pulumi env run <org>/<env> -- <command>
+pulumi env run myorg/aws-dev -- pulumi up
+pulumi env run myorg/aws-dev -- aws s3 ls
 
 # Open environment (resolve and display)
-esc open <org>/<env>
-esc open <org>/<env> --format json
-esc open <org>/<env> --format shell
-esc open <org>/<env> --format dotenv
+pulumi env open <org>/<env>
+pulumi env open <org>/<env> --format json
+pulumi env open <org>/<env> --format shell
+pulumi env open <org>/<env> --format dotenv
 ```
 
 ### Versioning
 
 ```bash
 # List versions
-esc env version ls <org>/<env>
+pulumi env version ls <org>/<env>
 
 # Tag a version
-esc env version tag <org>/<env> <tag>
-esc env version tag myorg/prod stable
+pulumi env version tag <org>/<env> <tag>
+pulumi env version tag myorg/prod stable
 
 # Rollback to version
-esc env version rollback <org>/<env> <version>
+pulumi env version rollback <org>/<env> <version>
 
 # Diff versions
-esc env diff <org>/<env>@<v1> <org>/<env>@<v2>
+pulumi env diff <org>/<env>@<v1> <org>/<env>@<v2>
 ```
 
 ## ESC Environment Syntax
@@ -259,4 +259,4 @@ const apiKey = config.requireSecret("myapp:apiKey");
 
 ### Environment Variables
 
-Environment variables defined in ESC are automatically available to your Pulumi program and any commands run with `esc run`.
+Environment variables defined in ESC are automatically available to your Pulumi program and any commands run with `pulumi env run`.

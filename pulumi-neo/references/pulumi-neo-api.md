@@ -62,9 +62,24 @@ Retrieves task details and current status.
   "createdAt": "2025-01-15T00:00:00Z",
   "entities": [
     {"type": "stack", "id": "my-stack"}
-  ]
+  ],
+  "isShared": false,
+  "sharedAt": "0001-01-01T00:00:00Z",
+  "createdBy": {
+    "name": "User Name",
+    "githubLogin": "username",
+    "avatarUrl": "https://avatars.githubusercontent.com/..."
+  }
 }
 ```
+
+**Task Status Values:**
+| Status | Description |
+|--------|-------------|
+| `running` | Neo is actively processing the task |
+| `idle` | Task is waiting for input or has finished processing |
+
+**Note:** Task completion and approval states are determined by examining events, not the status field.
 
 ### List Tasks
 
@@ -85,7 +100,7 @@ Lists all tasks for an organization.
     {
       "id": "task_abc123",
       "name": "Task name",
-      "status": "completed",
+      "status": "idle",
       "createdAt": "2025-01-15T00:00:00Z"
     }
   ],
@@ -208,6 +223,8 @@ Supported forges: `github`, `gitlab`, `bitbucket`
 }
 ```
 
+**Note:** Pull request entities are **read-only** and cannot be added via the API. They are automatically associated when Neo creates PRs during task execution.
+
 ### Policy Issue
 ```json
 {
@@ -218,41 +235,91 @@ Supported forges: `github`, `gitlab`, `bitbucket`
 
 ## Event Types
 
-### Agent Response
-Neo's response to user input:
+Events have a **nested type structure**:
+- **Outer `type`**: `userInput` or `agentResponse`
+- **Inner `eventBody.type`**: Specific event subtype
+
+### Outer Event Types
+
+| Type | Description |
+|------|-------------|
+| `userInput` | Messages or actions from the user |
+| `agentResponse` | Responses from Neo |
+
+### Inner Event Body Types (`eventBody.type`)
+
+| Type | Description |
+|------|-------------|
+| `user_message` | User's input message |
+| `assistant_message` | Neo's text response (may include `tool_calls`) |
+| `set_task_name` | Task naming event |
+| `exec_tool_call` | Tool execution started |
+| `tool_response` | Tool execution result |
+
+### Agent Response (Text)
 ```json
 {
   "type": "agentResponse",
+  "id": "event_123",
   "eventBody": {
+    "type": "assistant_message",
     "content": "Analysis complete. I found 3 security issues...",
     "timestamp": "2025-01-15T10:31:00Z"
   }
 }
 ```
 
-### Approval Request
-Neo requesting permission to proceed:
+### Agent Response (With Tool Calls)
 ```json
 {
-  "type": "approvalRequest",
+  "type": "agentResponse",
+  "id": "event_124",
   "eventBody": {
-    "approval_request_id": "req_123",
-    "description": "Create pull request with infrastructure changes",
+    "type": "assistant_message",
+    "content": "I'll create a pull request for these changes.",
+    "tool_calls": [
+      {
+        "id": "call_123",
+        "type": "function",
+        "function": {
+          "name": "approval_request",
+          "arguments": "{\"approval_request_id\": \"req_123\", \"description\": \"Create PR\"}"
+        }
+      }
+    ],
     "timestamp": "2025-01-15T10:32:00Z"
   }
 }
 ```
 
 ### User Input
-User messages in the event stream:
 ```json
 {
   "type": "userInput",
+  "id": "event_125",
   "eventBody": {
+    "type": "user_message",
     "content": "Please proceed with the changes",
     "timestamp": "2025-01-15T10:35:00Z"
   }
 }
+```
+
+### Detecting Approval Requests
+
+Approval requests are embedded in `agentResponse` events as tool calls, not as separate event types:
+
+```python
+def find_pending_approval(events):
+    for event in reversed(events):
+        if event.get("type") == "agentResponse":
+            body = event.get("eventBody", {})
+            tool_calls = body.get("tool_calls", [])
+            for call in tool_calls:
+                if call.get("function", {}).get("name") == "approval_request":
+                    args = json.loads(call["function"]["arguments"])
+                    return args.get("approval_request_id")
+    return None
 ```
 
 ## Error Codes

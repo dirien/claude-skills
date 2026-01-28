@@ -112,6 +112,66 @@ func main() {
 }
 ```
 
+## Resource Protection
+
+Prevent accidental deletion of critical resources:
+
+```go
+// Protect resource from deletion
+db, err := rds.NewInstance(ctx, "prod-db", &rds.InstanceArgs{
+    // ... config
+}, pulumi.Protect(true))
+
+// Retain resource on stack destroy (useful for data)
+bucket, err := s3.NewBucket(ctx, "data-bucket", &s3.BucketArgs{
+    // ... config
+}, pulumi.RetainOnDelete(true))
+```
+
+## Component Resource Pitfalls
+
+Common mistakes to avoid:
+
+1. **Forgetting `pulumi.Parent(component)`** - Child resources won't be properly associated; deletion may fail
+2. **Skipping `RegisterResourceOutputs()`** - Outputs won't be tracked; cross-stack references break
+3. **Hardcoding values** - Reduces reusability; use args struct instead
+4. **Overly complex components** - Keep components focused on single logical units
+5. **Missing input validation** - Validate args before creating resources
+
+## Stack Pitfalls
+
+1. **Hardcoding environment values** - Use configuration or ESC instead
+2. **Sharing state between environments** - Each stack should have isolated state
+3. **Circular stack references** - Design dependency graph carefully
+4. **Unprotected production resources** - Use `pulumi.Protect(true)` for critical infra
+5. **Unencrypted secrets** - Always use `--secret` flag or ESC secrets
+
+## CI/CD Patterns
+
+### GitHub Actions with ESC
+
+```yaml
+name: Deploy
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pulumi/auth-actions@v1
+        with:
+          organization: myorg
+          requested-token-type: urn:pulumi:token-type:access_token:organization
+
+      - name: Deploy with ESC
+        run: |
+          pulumi env run myorg/aws-prod -- pulumi up --yes
+```
+
 ## Configuration Patterns
 
 ```go
@@ -235,5 +295,31 @@ resource, err := s3.NewBucket(ctx, "bucket", &s3.BucketArgs{},
 
     // Delete before replace
     pulumi.DeleteBeforeReplace(true),
+
+    // Force replacement when specific properties change
+    pulumi.ReplaceOnChanges([]string{"tags.Environment"}),
+
+    // Skip delete when parent resource is deleted (useful for Kubernetes)
+    pulumi.DeletedWith(parentResource),
 )
 ```
+
+## Resource Hooks
+
+```go
+// Define lifecycle hooks for custom logic
+resource, err := s3.NewBucket(ctx, "bucket", &s3.BucketArgs{},
+    pulumi.Hooks(&pulumi.LifecycleHooks{
+        BeforeCreate: func(ctx context.Context, args pulumi.HookArgs) error {
+            fmt.Printf("Creating resource: %s\n", args.URN)
+            return nil
+        },
+        AfterCreate: func(ctx context.Context, args pulumi.HookArgs) error {
+            fmt.Printf("Created with outputs: %v\n", args.Outputs)
+            return nil
+        },
+    }),
+)
+```
+
+> **Note:** Hooks require `--run-program` flag when running `pulumi destroy`.

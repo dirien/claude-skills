@@ -87,6 +87,87 @@ def add_tags(args: pulumi.ResourceTransformationArgs):
     return pulumi.ResourceTransformationResult(args.props, args.opts)
 
 pulumi.runtime.register_stack_transformation(add_tags)
+
+# Enforce encryption on all S3 buckets
+def enforce_s3_encryption(args: pulumi.ResourceTransformationArgs):
+    if args.type_ == "aws:s3/bucket:Bucket":
+        args.props["server_side_encryption_configuration"] = {
+            "rule": {
+                "apply_server_side_encryption_by_default": {
+                    "sse_algorithm": "aws:kms",
+                },
+            },
+        }
+    return pulumi.ResourceTransformationResult(args.props, args.opts)
+
+pulumi.runtime.register_stack_transformation(enforce_s3_encryption)
+```
+
+## Resource Protection
+
+Prevent accidental deletion of critical resources:
+
+```python
+import pulumi
+from pulumi_aws import rds, s3
+
+# Protect resource from deletion
+db = rds.Instance(
+    "prod-db",
+    # ... config
+    opts=pulumi.ResourceOptions(protect=True),
+)
+
+# Retain resource on stack destroy (useful for data)
+bucket = s3.Bucket(
+    "data-bucket",
+    # ... config
+    opts=pulumi.ResourceOptions(retain_on_delete=True),
+)
+```
+
+## Component Resource Pitfalls
+
+Common mistakes to avoid:
+
+1. **Forgetting `parent=self`** - Child resources won't be properly associated; deletion may fail
+2. **Skipping `register_outputs()`** - Outputs won't be tracked; cross-stack references break
+3. **Hardcoding values** - Reduces reusability; use args class instead
+4. **Overly complex components** - Keep components focused on single logical units
+5. **Missing input validation** - Validate args before creating resources
+
+## Stack Pitfalls
+
+1. **Hardcoding environment values** - Use configuration or ESC instead
+2. **Sharing state between environments** - Each stack should have isolated state
+3. **Circular stack references** - Design dependency graph carefully
+4. **Unprotected production resources** - Use `protect=True` for critical infra
+5. **Unencrypted secrets** - Always use `--secret` flag or ESC secrets
+
+## CI/CD Patterns
+
+### GitHub Actions with ESC
+
+```yaml
+name: Deploy
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pulumi/auth-actions@v1
+        with:
+          organization: myorg
+          requested-token-type: urn:pulumi:token-type:access_token:organization
+
+      - name: Deploy with ESC
+        run: |
+          pulumi env run myorg/aws-prod -- pulumi up --yes
 ```
 
 ## Configuration Patterns
@@ -209,9 +290,38 @@ resource = aws.s3.Bucket(
             update="30m",
             delete="30m",
         ),
+
+        # Force replacement when specific properties change
+        replace_on_changes=["tags.Environment"],
+
+        # Skip delete when parent resource is deleted (useful for Kubernetes)
+        deleted_with=parent_resource,
     ),
 )
 ```
+
+## Resource Hooks
+
+```python
+# Define lifecycle hooks for custom logic
+def before_create(args: pulumi.HookArgs):
+    print(f"Creating resource: {args.urn}")
+
+def after_create(args: pulumi.HookArgs):
+    print(f"Created with outputs: {args.outputs}")
+
+resource = aws.s3.Bucket(
+    "bucket",
+    opts=pulumi.ResourceOptions(
+        hooks=pulumi.LifecycleHooks(
+            before_create=before_create,
+            after_create=after_create,
+        ),
+    ),
+)
+```
+
+> **Note:** Hooks require `--run-program` flag when running `pulumi destroy`. Not supported in YAML.
 
 ## Dynamic Providers
 

@@ -212,19 +212,48 @@ def format_event(event: dict) -> str:
     """Format an event for display."""
     event_type = event.get("type", "unknown")
     body = event.get("eventBody", {})
+    inner_type = body.get("type", "")
 
     if event_type == "agentResponse":
         content = body.get("content", "")
-        return f"\n[Neo] {content}"
+        result = f"\n[Neo] {content}" if content else ""
+
+        # Check for tool calls (including approval requests)
+        tool_calls = body.get("tool_calls", [])
+        for call in tool_calls:
+            func = call.get("function", {})
+            func_name = func.get("name", "")
+            if func_name == "approval_request":
+                try:
+                    args = json.loads(func.get("arguments", "{}"))
+                    req_id = args.get("approval_request_id", "")
+                    desc = args.get("description", "")
+                    result += f"\n[Approval Required] {desc}\n  Request ID: {req_id}"
+                except json.JSONDecodeError:
+                    pass
+        return result if result else f"\n[agentResponse:{inner_type}]"
     elif event_type == "userInput":
         content = body.get("content", "")
         return f"\n[You] {content}"
-    elif event_type == "approvalRequest":
-        req_id = body.get("approval_request_id", "")
-        desc = body.get("description", "")
-        return f"\n[Approval Required] {desc}\n  Request ID: {req_id}"
     else:
-        return f"\n[{event_type}] {json.dumps(body, indent=2)}"
+        return f"\n[{event_type}:{inner_type}] {json.dumps(body, indent=2)}"
+
+
+def find_pending_approval(events: list) -> Optional[str]:
+    """Find pending approval request ID from events."""
+    for event in reversed(events):
+        if event.get("type") == "agentResponse":
+            body = event.get("eventBody", {})
+            tool_calls = body.get("tool_calls", [])
+            for call in tool_calls:
+                func = call.get("function", {})
+                if func.get("name") == "approval_request":
+                    try:
+                        args = json.loads(func.get("arguments", "{}"))
+                        return args.get("approval_request_id")
+                    except json.JSONDecodeError:
+                        pass
+    return None
 
 
 def poll_task(
@@ -239,9 +268,10 @@ def poll_task(
     print("-" * 60)
 
     seen_events = set()
+    all_events = []
     continuation_token = None
     start_time = time.time()
-    pending_approval_id = None
+    last_status = None
 
     while True:
         # Check timeout
@@ -262,30 +292,36 @@ def poll_task(
             event_id = event.get("id")
             if event_id and event_id not in seen_events:
                 seen_events.add(event_id)
+                all_events.append(event)
                 print(format_event(event))
-
-                # Track pending approvals
-                if event.get("type") == "approvalRequest":
-                    body = event.get("eventBody", {})
-                    pending_approval_id = body.get("approval_request_id")
 
         if new_token:
             continuation_token = new_token
 
-        # Check for completion
-        if status in ["completed", "failed"]:
+        # Check for pending approval (detected from events, not status)
+        pending_approval_id = find_pending_approval(all_events)
+
+        # If status is idle, check if we're waiting for approval or truly done
+        if status == "idle":
+            if pending_approval_id:
+                print(f"\n{'='*60}")
+                print("Task is waiting for approval.")
+                print(f"Approve: python neo_task.py --org {org} --task-id {task_id} --approve")
+                print(f"Cancel:  python neo_task.py --org {org} --task-id {task_id} --cancel")
+                break
+            else:
+                # Task finished processing
+                print(f"\n{'='*60}")
+                print("Task completed (idle)")
+                break
+
+        # If status changed from running to idle, task is done
+        if last_status == "running" and status == "idle":
             print(f"\n{'='*60}")
-            print(f"Task {status}")
+            print("Task completed")
             break
 
-        # Check for pending approval
-        if status == "waiting_for_approval" and pending_approval_id:
-            print(f"\n{'='*60}")
-            print("Task is waiting for approval.")
-            print(f"Approve: python neo_task.py --org {org} --task-id {task_id} --approve")
-            print(f"Cancel:  python neo_task.py --org {org} --task-id {task_id} --cancel")
-            break
-
+        last_status = status
         time.sleep(poll_interval)
 
 
@@ -468,11 +504,7 @@ Examples:
         if not approval_id and args.approve:
             # Try to find approval ID from events
             events, _ = get_events(org, args.task_id)
-            for event in reversed(events):
-                if event.get("type") == "approvalRequest":
-                    body = event.get("eventBody", {})
-                    approval_id = body.get("approval_request_id")
-                    break
+            approval_id = find_pending_approval(events)
 
         if args.approve:
             if not approval_id:

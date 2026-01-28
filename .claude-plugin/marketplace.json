@@ -4,66 +4,41 @@
     "name": "Pulumi",
     "email": "support@pulumi.com"
   },
-  "metadata": {
-    "description": "Pulumi infrastructure as code skills for Claude Code",
-    "version": "1.1.0"
-  },
   "plugins": [
     {
       "name": "pulumi-typescript",
-      "source": "./",
+      "source": "./pulumi-typescript",
       "description": "Pulumi TypeScript skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
-      "version": "1.1.0",
-      "author": {
-        "name": "Pulumi"
-      },
-      "category": "infrastructure",
-      "tags": ["pulumi", "typescript", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
-      "skills": [
-        "./pulumi-typescript"
-      ]
+      "version": "1.2.0",
+      "author": { "name": "Pulumi" }
     },
     {
       "name": "pulumi-go",
-      "source": "./",
+      "source": "./pulumi-go",
       "description": "Pulumi Go skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
-      "version": "1.1.0",
-      "author": {
-        "name": "Pulumi"
-      },
-      "category": "infrastructure",
-      "tags": ["pulumi", "go", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
-      "skills": [
-        "./pulumi-go"
-      ]
+      "version": "1.2.0",
+      "author": { "name": "Pulumi" }
     },
     {
       "name": "pulumi-python",
-      "source": "./",
+      "source": "./pulumi-python",
       "description": "Pulumi Python skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
-      "version": "1.1.0",
-      "author": {
-        "name": "Pulumi"
-      },
-      "category": "infrastructure",
-      "tags": ["pulumi", "python", "infrastructure-as-code", "iac", "aws", "azure", "gcp", "esc"],
-      "skills": [
-        "./pulumi-python"
-      ]
+      "version": "1.2.0",
+      "author": { "name": "Pulumi" }
     },
     {
       "name": "pulumi-neo",
-      "source": "./",
+      "source": "./pulumi-neo",
       "description": "Pulumi Neo AI agent skill for natural language infrastructure as code generation.",
-      "version": "1.1.0",
-      "author": {
-        "name": "Pulumi"
-      },
-      "category": "infrastructure",
-      "tags": ["pulumi", "neo", "ai", "infrastructure-as-code", "iac", "aws", "azure", "gcp"],
-      "skills": [
-        "./pulumi-neo"
-      ]
+      "version": "1.2.0",
+      "author": { "name": "Pulumi" }
+    },
+    {
+      "name": "pulumi-cli",
+      "source": "./pulumi-cli",
+      "description": "Pulumi CLI command reference for infrastructure deployments and stack management.",
+      "version": "1.2.0",
+      "author": { "name": "Pulumi" }
     }
   ]
 }
