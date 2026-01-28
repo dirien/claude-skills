@@ -326,6 +326,13 @@ def poll_task(
 
 
 def main():
+    # Validate token early
+    token = os.environ.get("PULUMI_ACCESS_TOKEN")
+    if not token:
+        print("Error: PULUMI_ACCESS_TOKEN environment variable not set")
+        print("Set it with: export PULUMI_ACCESS_TOKEN=<your-token>")
+        sys.exit(1)
+
     parser = argparse.ArgumentParser(
         description="Pulumi Neo Task Manager",
         formatter_class=argparse.RawDescriptionHelpFormatter,

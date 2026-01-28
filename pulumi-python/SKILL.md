@@ -1,7 +1,7 @@
 ---
 name: pulumi-python
 description: This skill should be used when the user asks to "create Pulumi Python project", "write Pulumi Python code", "use Pulumi ESC with Python", "set up OIDC for Pulumi", or mentions Pulumi infrastructure automation with Python.
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Pulumi Python Skill

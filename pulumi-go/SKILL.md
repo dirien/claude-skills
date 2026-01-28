@@ -1,7 +1,7 @@
 ---
 name: pulumi-go
 description: This skill should be used when the user asks to "create Pulumi Go project", "write Pulumi Go code", "use Pulumi ESC with Go", "set up OIDC for Pulumi", or mentions Pulumi infrastructure automation with Golang.
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Pulumi Go Skill
