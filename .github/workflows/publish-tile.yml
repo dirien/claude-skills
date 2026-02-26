@@ -1,0 +1,19 @@
+name: Publish Tile
+
+permissions:
+  id-token: write
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: tesslio/publish@f972a06c73c2fc43d184456af71852b2f1a65c97 # main
+        with:
+          token: ${{ secrets.TESSL_API_TOKEN }}

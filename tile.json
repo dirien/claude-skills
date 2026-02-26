@@ -1,0 +1,23 @@
+{
+  "name": "dirien/pulumi-skills",
+  "version": "1.3.0",
+  "summary": "Pulumi infrastructure-as-code skills for Claude Code with ESC, OIDC, and cloud provider best practices.",
+  "private": false,
+  "skills": {
+    "pulumi-typescript": {
+      "path": "pulumi-typescript/SKILL.md"
+    },
+    "pulumi-go": {
+      "path": "pulumi-go/SKILL.md"
+    },
+    "pulumi-python": {
+      "path": "pulumi-python/SKILL.md"
+    },
+    "pulumi-neo": {
+      "path": "pulumi-neo/SKILL.md"
+    },
+    "pulumi-cli": {
+      "path": "pulumi-cli/SKILL.md"
+    }
+  }
+}
