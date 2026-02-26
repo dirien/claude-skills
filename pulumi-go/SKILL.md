@@ -1,7 +1,6 @@
 ---
 name: pulumi-go
-description: This skill should be used when the user asks to "create Pulumi Go project", "write Pulumi Go code", "use Pulumi ESC with Go", "set up OIDC for Pulumi", or mentions Pulumi infrastructure automation with Golang.
-version: 1.3.0
+description: Creates Pulumi infrastructure-as-code projects in Go, configures OIDC authentication, and integrates with Pulumi ESC for centralized secrets and configuration management. Use when setting up Pulumi Go projects, writing infrastructure code with Go, configuring OIDC for Pulumi, using Pulumi ESC with Go, or automating cloud infrastructure with Golang.
 ---
 
 # Pulumi Go Skill
@@ -20,19 +19,7 @@ pulumi new azure-go
 pulumi new gcp-go
 ```
 
-**Project structure:**
-```
-my-project/
-├── Pulumi.yaml
-├── Pulumi.dev.yaml      # Stack config (use ESC instead)
-├── go.mod
-├── go.sum
-└── main.go
-```
-
 ### 2. Pulumi ESC Integration
-
-Instead of using `pulumi config set` or stack config files, use Pulumi ESC for centralized secrets and configuration.
 
 **Link ESC environment to stack:**
 ```bash
@@ -126,7 +113,7 @@ func main() {
 }
 ```
 
-**Component resources for reusability:**
+**Component resources:**
 ```go
 package main
 
@@ -177,8 +164,6 @@ func NewWebService(ctx *pulumi.Context, name string, args *WebServiceArgs, opts 
 package main
 
 import (
-    "fmt"
-
     "github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
 
@@ -193,7 +178,6 @@ func main() {
         vpcId := networkingStack.GetStringOutput(pulumi.String("vpcId"))
         subnetIds := networkingStack.GetOutput(pulumi.String("privateSubnetIds"))
 
-        // Use in resource creation
         ctx.Export("vpcId", vpcId)
 
         return nil
@@ -206,6 +190,9 @@ func main() {
 package main
 
 import (
+    "fmt"
+    "strings"
+
     "github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
 
@@ -242,8 +229,6 @@ func main() {
 
 ### 4. Using ESC with pulumi env run
 
-Run any command with ESC environment variables injected:
-
 ```bash
 # Run pulumi commands with ESC credentials
 pulumi env run myorg/aws-dev -- pulumi up
@@ -255,18 +240,49 @@ pulumi env run myorg/test-env -- go test ./...
 pulumi env open myorg/myproject-dev --format shell
 ```
 
-### 5. Error Handling Patterns
+### 5. Deployment Workflow with Validation
+
+**Build and preview:**
+```bash
+# Build Go binary first
+go build -o $(basename $(pwd))
+
+# Preview changes
+pulumi preview
+```
+
+**Validation checkpoint:** Review the preview output. If changes are unexpected:
+- Check ESC environment values: `pulumi env open myorg/myproject-dev`
+- Verify stack config: `pulumi config`
+- Inspect resource diffs carefully before proceeding
+
+**Deploy:**
+```bash
+# Deploy after validation
+pulumi up
+
+# Verify outputs
+pulumi stack output
+```
+
+**Error recovery:** If deployment fails:
+1. Check error logs for resource-specific issues
+2. Verify credentials and permissions: `pulumi env open myorg/myproject-dev --format shell`
+3. Attempt rollback if needed: `pulumi refresh` (updates state without changes)
+4. Fix the issue and retry: `pulumi up`
+
+For destructive changes (deletions), Pulumi will prompt for confirmation during `pulumi up`.
+
+### 6. Error Handling
 
 ```go
 func main() {
     pulumi.Run(func(ctx *pulumi.Context) error {
-        // Always check errors
         bucket, err := s3.NewBucket(ctx, "bucket", &s3.BucketArgs{})
         if err != nil {
             return fmt.Errorf("failed to create bucket: %w", err)
         }
 
-        // Chain operations with error handling
         policy, err := s3.NewBucketPolicy(ctx, "policy", &s3.BucketPolicyArgs{
             Bucket: bucket.ID(),
             Policy: bucket.Arn.ApplyT(func(arn string) string {
@@ -282,17 +298,17 @@ func main() {
 }
 ```
 
-### 6. Multi-Language Components
+### 7. Multi-Language Components
 
-Create components in Go that can be consumed from any Pulumi language (TypeScript, Python, C#, Java, YAML).
+Create reusable components in Go for consumption from any Pulumi language.
 
-**Project structure for multi-language component:**
+**Project structure:**
 ```
 my-component/
-├── PulumiPlugin.yaml      # Required for multi-language
+├── PulumiPlugin.yaml
 ├── go.mod
 ├── go.sum
-└── main.go                # Component + entry point
+└── main.go
 ```
 
 **PulumiPlugin.yaml:**
@@ -300,7 +316,7 @@ my-component/
 runtime: go
 ```
 
-**Component with proper Args struct (main.go):**
+**Component implementation:**
 ```go
 package main
 
@@ -313,7 +329,7 @@ import (
     "github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
 
-// Args struct - use Input types for all properties
+// Use Input types for all properties
 type SecureBucketArgs struct {
     BucketName       pulumi.StringInput `pulumi:"bucketName"`
     EnableVersioning pulumi.BoolInput   `pulumi:"enableVersioning,optional"`
@@ -363,7 +379,6 @@ func NewSecureBucket(ctx *pulumi.Context, name string, args *SecureBucketArgs, o
     return component, nil
 }
 
-// Entry point for multi-language support
 func main() {
     prov, err := infer.NewProviderBuilder().
         WithNamespace("myorg").
@@ -378,7 +393,7 @@ func main() {
 }
 ```
 
-**Publishing for multi-language consumption:**
+**Publishing:**
 ```bash
 # Consume from git repository
 pulumi package add github.com/myorg/my-component
@@ -390,16 +405,10 @@ pulumi package add github.com/myorg/my-component@v1.0.0
 pulumi package add /path/to/local/my-component
 ```
 
-**Multi-language Args requirements:**
-- Use `pulumi.*Input` types for all properties
-- Use `pulumi:"fieldName"` struct tags
-- Add `,optional` tag suffix for optional fields
-- Avoid interface{} or unsupported types
-
 ## Best Practices
 
 ### Security
-- Use Pulumi ESC for all secrets - never commit secrets to stack config files
+- Use Pulumi ESC for all secrets — never commit secrets to stack config files
 - Enable OIDC authentication instead of static credentials
 - Use dynamic secrets with short TTLs when possible
 - Apply least-privilege IAM policies
@@ -409,10 +418,9 @@ pulumi package add /path/to/local/my-component
 - Leverage Go's type system for configuration validation
 - Keep stack-specific config in ESC environments
 - Use stack references for cross-stack dependencies
-- Handle all errors explicitly
 
 ### Deployment
-- Always run `pulumi preview` before `pulumi up`
+- Always run `pulumi preview` before `pulumi up` and review changes carefully
 - Use ESC environment versioning and tags for releases
 - Implement proper tagging strategy for all resources
 - Build your Go program before running Pulumi: `go build -o $(basename $(pwd))`
@@ -435,32 +443,6 @@ pulumi preview                         # Preview changes
 pulumi up                              # Deploy
 pulumi stack output                    # View outputs
 pulumi destroy                         # Tear down
-```
-
-## Go-Specific Considerations
-
-### Module Management
-
-```bash
-# Initialize Go modules
-go mod init myproject
-
-# Add Pulumi dependencies
-go get github.com/pulumi/pulumi/sdk/v3
-go get github.com/pulumi/pulumi-aws/sdk/v6
-
-# Update dependencies
-go mod tidy
-```
-
-### Building
-
-```bash
-# Build before running Pulumi
-go build -o $(basename $(pwd))
-
-# Or let Pulumi build automatically (slower)
-pulumi up
 ```
 
 ## References

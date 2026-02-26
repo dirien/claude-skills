@@ -1,12 +1,9 @@
 ---
 name: pulumi-neo
-description: This skill should be used when the user asks to "create Neo task", "use Pulumi Neo", "analyze infrastructure with Neo", "automate infrastructure with AI", or mentions conversational infrastructure management through natural language.
-version: 1.3.0
+description: Manages cloud infrastructure through natural language conversations with Pulumi Neo, an AI agent for platform engineers. Enables infrastructure analysis, resource provisioning, stack deployment, and configuration management via conversational AI. Use when creating Neo tasks, requesting infrastructure analysis, automating cloud deployments, managing infrastructure as code (IaC), provisioning AWS/Azure/GCP resources, or managing infrastructure through natural language prompts.
 ---
 
 # Pulumi Neo Skill
-
-Pulumi Neo is an AI agent for platform engineers that enables conversational infrastructure management through natural language.
 
 ## Prerequisites
 
@@ -27,79 +24,27 @@ If `pulumi org get-default` returns an error or shows a non-cloud backend, promp
 
 ## Quick Start
 
+**IMPORTANT:** Always use `--no-poll` in Claude Code to prevent blocking.
+
+**Preferred: Python Script**
 ```bash
-# 1. Set your token
-export PULUMI_ACCESS_TOKEN=<your-token>
-
-# 2. Get your organization
-pulumi org get-default
-# Or specify manually: --org your-org-name
-
-# 3. Ask Neo something (non-blocking)
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-TASK=$(curl -s -X POST "https://api.pulumi.com/api/preview/agents/YOUR_ORG/tasks" \
-  -H "Authorization: token $PULUMI_ACCESS_TOKEN" \
-  -H "Accept: application/vnd.pulumi+8" \
-  -H "Content-Type: application/json" \
-  -d "{\"message\":{\"type\":\"user_message\",\"content\":\"How many stacks do I have?\",\"timestamp\":\"$TIMESTAMP\",\"entity_diff\":{\"add\":[],\"remove\":[]}}}")
-echo $TASK
-
-# 4. Get the response (wait a few seconds first)
-TASK_ID=$(echo $TASK | jq -r '.taskId')
-curl -s "https://api.pulumi.com/api/preview/agents/YOUR_ORG/tasks/$TASK_ID/events" \
-  -H "Authorization: token $PULUMI_ACCESS_TOKEN" \
-  -H "Accept: application/vnd.pulumi+8" | jq '.events[-1].eventBody.content'
+python <skill-base-directory>/scripts/neo_task.py --org <org> --message "Your message" --no-poll
 ```
 
-## Claude Code Integration
-
-### Option 1: Direct API Calls (Always Available)
-
-Use curl to interact with the Neo API directly:
-
+**Alternative: Direct API**
 ```bash
-# Set your token
 export PULUMI_ACCESS_TOKEN=<your-token>
-
-# Create a task
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 curl -s -X POST "https://api.pulumi.com/api/preview/agents/<org>/tasks" \
   -H "Authorization: token $PULUMI_ACCESS_TOKEN" \
   -H "Accept: application/vnd.pulumi+8" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"message\": {
-      \"type\": \"user_message\",
-      \"content\": \"Your message here\",
-      \"timestamp\": \"$TIMESTAMP\",
-      \"entity_diff\": {\"add\": [], \"remove\": []}
-    }
-  }"
-
-# Get task events
-curl -s "https://api.pulumi.com/api/preview/agents/<org>/tasks/<task-id>/events" \
-  -H "Authorization: token $PULUMI_ACCESS_TOKEN" \
-  -H "Accept: application/vnd.pulumi+8"
+  -d "{\"message\":{\"type\":\"user_message\",\"content\":\"How many stacks do I have?\",\"timestamp\":\"$TIMESTAMP\",\"entity_diff\":{\"add\":[],\"remove\":[]}}}"
 ```
 
-### Option 2: Python Script
+Fetch events: `curl -s "https://api.pulumi.com/api/preview/agents/<org>/tasks/<task-id>/events" -H "Authorization: token $PULUMI_ACCESS_TOKEN" -H "Accept: application/vnd.pulumi+8" | jq '.events[-1].eventBody.content'`
 
-**IMPORTANT:** Always use `--no-poll` in Claude Code to prevent blocking.
-
-```bash
-python <skill-base-directory>/scripts/neo_task.py --org <org> --message "Your message" --no-poll
-```
-
-In Claude Code, use the full absolute path provided in the skill context.
-
-### Option 3: MCP Tools (Requires Pulumi MCP Server)
-
-If you have the Pulumi MCP server installed and configured:
-- `mcp__pulumi__neo-bridge`
-- `mcp__pulumi__neo-get-tasks`
-- `mcp__pulumi__neo-continue-task`
-
-**WARNING:** Never run the Python script without `--no-poll` in Claude Code - the polling loop will block indefinitely.
+**MCP Tools** (if Pulumi MCP server is installed): `mcp__pulumi__neo-bridge`, `mcp__pulumi__neo-get-tasks`, `mcp__pulumi__neo-continue-task`
 
 ## Using the Python Script
 
@@ -140,7 +85,7 @@ python scripts/neo_task.py --org <org-name> --task-id <task-id> --cancel
 
 ## Neo Task Workflow
 
-### 1. Creating Tasks
+### Creating Tasks
 
 Tasks are created with a natural language message describing what you want Neo to do:
 
@@ -149,18 +94,11 @@ Tasks are created with a natural language message describing what you want Neo t
 - **Configuration changes**: "Add monitoring to my Lambda functions"
 - **Multi-step workflows**: "Set up a complete CI/CD pipeline for this project"
 
-### 2. Entity Context
+### Entity Context
 
-Provide context to Neo by attaching entities:
+Attach entities for context: `stack` (name + project), `repository` (name + org + forge), `pull_request` (number + merged + repository), `policy_issue` (id).
 
-| Entity Type | Use Case |
-|-------------|----------|
-| `stack` | Reference a Pulumi stack (name + project) |
-| `repository` | Reference a code repository (name + org + forge) |
-| `pull_request` | Reference a PR (number + merged status + repository) |
-| `policy_issue` | Reference a governance policy issue (id) |
-
-### 3. Task Status
+### Task Status
 
 | Status | Description |
 |--------|-------------|
@@ -169,7 +107,7 @@ Provide context to Neo by attaching entities:
 
 **Note:** Task completion and approval requests are determined by examining events, not task status.
 
-### 4. Approval Flow
+### Approval Flow
 
 When Neo requires confirmation for an operation:
 
@@ -188,21 +126,21 @@ When Neo requires confirmation for an operation:
 ```bash
 python scripts/neo_task.py --org myorg \
   --message "What security improvements can I make to my AWS infrastructure?" \
-  --stack-name prod --stack-project aws-infra
+  --stack-name prod --stack-project aws-infra --no-poll
 ```
 
 ### Fix Policy Violations
 
 ```bash
 python scripts/neo_task.py --org myorg \
-  --message "Help me fix the policy violations in my production stack"
+  --message "Help me fix the policy violations in my production stack" --no-poll
 ```
 
 ### Generate Pulumi Code
 
 ```bash
 python scripts/neo_task.py --org myorg \
-  --message "Create a new Pulumi TypeScript project for a containerized web app on AWS ECS"
+  --message "Create a new Pulumi TypeScript project for a containerized web app on AWS ECS" --no-poll
 ```
 
 ### Review Pull Request
@@ -210,70 +148,18 @@ python scripts/neo_task.py --org myorg \
 ```bash
 python scripts/neo_task.py --org myorg \
   --message "Review the infrastructure changes in this PR" \
-  --repo-name infra --repo-org myorg --repo-forge github
-```
-
-## Best Practices
-
-### Clear Instructions
-- Be specific about what you want Neo to do
-- Include relevant context (stack names, regions, requirements)
-- Specify constraints (budget, compliance requirements)
-
-### Entity Context
-- Always attach relevant stack or repository entities
-- This helps Neo understand the scope of your request
-
-### Approval Workflow
-- Review Neo's proposed changes carefully before approving
-- Neo generates pull requests for infrastructure changes
-- Use the preview feature to understand impact before deployment
-
-## Error Recovery
-
-### Token Issues
-If the Python script reports token not set but it is:
-```bash
-# Verify token is exported (not just set)
-export PULUMI_ACCESS_TOKEN="$PULUMI_ACCESS_TOKEN"
-
-# Test with curl directly
-curl -s -H "Authorization: token $PULUMI_ACCESS_TOKEN" \
-  https://api.pulumi.com/api/user
-```
-
-### API Errors
-| Error | Cause | Solution |
-|-------|-------|----------|
-| 401 | Invalid/missing token | Check `PULUMI_ACCESS_TOKEN` is set and valid |
-| 404 | Wrong org or endpoint | Verify org name with `pulumi org get-default` |
-| 409 | Task busy | Wait for current operation to complete |
-
-### Script Hangs
-If the script hangs, you forgot `--no-poll`. Kill it with Ctrl+C and add `--no-poll`:
-```bash
-python neo_task.py --org myorg --message "..." --no-poll
+  --repo-name infra --repo-org myorg --repo-forge github --no-poll
 ```
 
 ## Troubleshooting
 
-### Authentication Errors (401)
-```bash
-# Verify token is set
-echo $PULUMI_ACCESS_TOKEN
-
-# Test authentication
-curl -H "Authorization: token $PULUMI_ACCESS_TOKEN" \
-  https://api.pulumi.com/api/user
-```
-
-### Organization Not Found (404)
-- Verify organization name with `pulumi org get-default`
-- Ensure your token has access to the organization
-
-### Cannot Respond While Request Pending (409)
-- Wait for Neo to finish processing before sending new messages
-- Poll for status updates before responding
+| Error | Cause | Solution |
+|-------|-------|----------|
+| 401 | Invalid/missing token | Verify with `curl -s -H "Authorization: token $PULUMI_ACCESS_TOKEN" https://api.pulumi.com/api/user` |
+| 404 | Wrong org or endpoint | Verify org with `pulumi org get-default` |
+| 409 | Task busy | Wait for current operation to complete |
+| Script hangs | Missing `--no-poll` | Kill with Ctrl+C, add `--no-poll` flag |
+| Token not found | Not exported | Run `export PULUMI_ACCESS_TOKEN="$PULUMI_ACCESS_TOKEN"` |
 
 ## API Reference
 

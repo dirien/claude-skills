@@ -1,7 +1,6 @@
 ---
 name: pulumi-cli
-description: Pulumi CLI command reference for infrastructure deployments. Use when the user asks about "pulumi commands", "deploy with pulumi", "pulumi up", "pulumi preview", "manage pulumi stacks", "pulumi state management", "export/import pulumi state", or needs help with Pulumi CLI operations and workflows.
-version: 1.2.0
+description: Pulumi CLI command reference for infrastructure deployments. Provides commands to create and manage stacks, configure backends, manage secrets, handle stack outputs, and perform state operations. Use when the user asks about "pulumi commands", "deploy with pulumi", "pulumi up", "pulumi preview", "manage pulumi stacks", "pulumi state management", "export/import pulumi state", or needs help with Pulumi CLI operations and workflows.
 ---
 
 # Pulumi CLI Skill
