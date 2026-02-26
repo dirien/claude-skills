@@ -1,7 +1,6 @@
 ---
 name: pulumi-typescript
-description: This skill should be used when the user asks to "create Pulumi TypeScript project", "write Pulumi TypeScript code", "use Pulumi ESC with TypeScript", "set up OIDC for Pulumi", or mentions Pulumi infrastructure automation with Node.js/TypeScript.
-version: 1.3.0
+description: Scaffolds Pulumi TypeScript infrastructure-as-code projects, writes IaC code with proper resource configuration, manages Pulumi ESC environments for centralized secrets and configuration, and configures OIDC authentication for cloud providers. Use when the user asks to create Pulumi TypeScript projects, write Pulumi infrastructure code, set up ESC environments, configure OIDC for Pulumi, or implement infrastructure automation with Node.js/TypeScript.
 ---
 
 # Pulumi TypeScript Skill
@@ -280,6 +279,57 @@ pulumi package add /path/to/local/my-component
 - Avoid functions/callbacks - not serializable
 - Constructor must have `args` parameter with type declaration
 
+## Deployment Workflow with Validation
+
+Follow this validated workflow for safe deployments:
+
+### 1. Preview Changes
+```bash
+pulumi preview
+```
+Review the output to understand what resources will be created, modified, or deleted.
+
+### 2. Validate Changes
+Check the preview output for:
+- Unexpected resource deletions or modifications
+- Correct number and type of resources
+- Proper configuration values (region, instance type, tags, etc.)
+
+If changes look incorrect, investigate the root cause before proceeding:
+```bash
+# Check current stack state
+pulumi stack output
+
+# Review ESC environment values
+pulumi env open myorg/myproject-dev
+
+# Verify configuration
+pulumi config
+```
+
+### 3. Deploy
+Once validated, deploy the changes:
+```bash
+pulumi up
+```
+
+### 4. Verify Outputs
+After successful deployment, confirm the outputs:
+```bash
+pulumi stack output
+```
+
+Compare outputs against expected values (e.g., bucket names, endpoint URLs, resource IDs).
+
+### Error Recovery
+
+If `pulumi up` fails mid-deployment:
+1. Check the error message for the specific resource that failed
+2. Review resource configuration and ESC environment values
+3. Fix the underlying issue (e.g., IAM permissions, invalid configuration)
+4. Run `pulumi up` again — Pulumi will resume from where it left off
+5. If the stack is in an inconsistent state, use `pulumi refresh` to sync state with actual cloud resources
+
 ## Best Practices
 
 ### Security
@@ -316,6 +366,7 @@ pulumi preview                         # Preview changes
 pulumi up                              # Deploy
 pulumi stack output                    # View outputs
 pulumi destroy                         # Tear down
+pulumi refresh                         # Sync state with cloud
 ```
 
 ## References

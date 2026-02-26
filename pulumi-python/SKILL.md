@@ -1,7 +1,6 @@
 ---
 name: pulumi-python
-description: This skill should be used when the user asks to "create Pulumi Python project", "write Pulumi Python code", "use Pulumi ESC with Python", "set up OIDC for Pulumi", or mentions Pulumi infrastructure automation with Python.
-version: 1.3.0
+description: Creates Pulumi infrastructure-as-code projects in Python, defines cloud resources (AWS, Azure, GCP), configures ESC environments for secrets management, and sets up OIDC authentication for secure deployments. Use when creating Pulumi Python projects, writing infrastructure code, configuring cloud providers, managing secrets with Pulumi ESC, setting up OIDC for Pulumi, or automating infrastructure deployments with Python.
 ---
 
 # Pulumi Python Skill
@@ -24,7 +23,6 @@ pulumi new gcp-python
 ```
 my-project/
 ├── Pulumi.yaml
-├── Pulumi.dev.yaml      # Stack config (use ESC instead)
 ├── __main__.py
 ├── requirements.txt     # or pyproject.toml
 └── venv/                # Virtual environment
@@ -32,7 +30,7 @@ my-project/
 
 ### 2. Pulumi ESC Integration
 
-Instead of using `pulumi config set` or stack config files, use Pulumi ESC for centralized secrets and configuration.
+Use Pulumi ESC for centralized secrets and configuration instead of stack config files.
 
 **Link ESC environment to stack:**
 ```bash
@@ -76,6 +74,15 @@ values:
     AWS_ACCESS_KEY_ID: ${aws.login.accessKeyId}
     AWS_SECRET_ACCESS_KEY: ${aws.login.secretAccessKey}
     AWS_SESSION_TOKEN: ${aws.login.sessionToken}
+```
+
+**Validate ESC environment:**
+```bash
+# View resolved values (verify no errors)
+pulumi env open myorg/myproject-dev
+
+# Check for missing required values
+pulumi env open myorg/myproject-dev --format json | jq .
 ```
 
 ### 3. Python Patterns
@@ -217,24 +224,7 @@ pulumi env run myorg/test-env -- pytest
 pulumi env open myorg/myproject-dev --format shell
 ```
 
-### 5. Async Patterns
-
-```python
-import pulumi
-import asyncio
-
-# Pulumi programs are single-threaded
-# Use Output.from_input for async-like patterns
-
-async def fetch_data():
-    # Async operation
-    return {"key": "value"}
-
-# Convert async result to Output
-data = pulumi.Output.from_input(asyncio.get_event_loop().run_until_complete(fetch_data()))
-```
-
-### 6. Multi-Language Components
+### 5. Multi-Language Components
 
 Create components in Python that can be consumed from any Pulumi language (TypeScript, Go, C#, Java, YAML).
 
@@ -339,29 +329,47 @@ pulumi package add /path/to/local/my-component
 - Constructor must have `args` parameter with type annotation
 - Use `Optional[Input[T]]` for optional properties
 
-## Best Practices
+### 6. Deployment Workflow
 
-### Security
-- Use Pulumi ESC for all secrets - never commit secrets to stack config files
+**Validate and deploy with error recovery:**
+
+```bash
+# Step 1: Preview changes
+pulumi preview
+
+# Step 2: Review output for errors or unexpected changes
+# If errors appear, fix code and re-run preview
+
+# Step 3: Deploy only after preview succeeds
+pulumi up
+
+# Step 4: Verify outputs
+pulumi stack output
+```
+
+**For ESC-based deployments:**
+```bash
+# Step 1: Validate ESC environment resolves correctly
+pulumi env open myorg/myproject-dev
+
+# Step 2: Preview with ESC environment
+pulumi env run myorg/myproject-dev -- pulumi preview
+
+# Step 3: Deploy with ESC environment
+pulumi env run myorg/myproject-dev -- pulumi up
+
+# Step 4: Check stack outputs
+pulumi stack output
+```
+
+## Configuration & Security
+
+- Use Pulumi ESC for all secrets — never commit secrets to stack config files or Pulumi.yaml
 - Enable OIDC authentication instead of static credentials
 - Use dynamic secrets with short TTLs when possible
-- Apply least-privilege IAM policies
-
-### Code Organization
+- Apply least-privilege IAM policies to OIDC roles
 - Use ComponentResources for reusable infrastructure patterns
-- Leverage Python's type hints for better IDE support
-- Keep stack-specific config in ESC environments
-- Use stack references for cross-stack dependencies
-- Prefer Args classes for type safety, or dict literals for brevity
-
-### Deployment
-- Always run `pulumi preview` before `pulumi up`
-- Use ESC environment versioning and tags for releases
-- Implement proper tagging strategy for all resources
-
-### Virtual Environments
-- Always use virtual environments (`venv`, `poetry`, or `uv`)
-- Specify toolchain in Pulumi.yaml for consistency
+- Leverage Python type hints for better IDE support and error detection
 
 ## Common Commands
 
@@ -387,9 +395,7 @@ poetry add pulumi-aws                  # Add dep (poetry)
 uv add pulumi-aws                      # Add dep (uv)
 ```
 
-## Python-Specific Considerations
-
-### Virtual Environment Setup
+## Python-Specific Configuration
 
 **Using pip (default):**
 ```yaml
@@ -420,30 +426,13 @@ runtime:
     virtualenv: .venv
 ```
 
-### Type Checking
-
+**Enable type checking:**
 ```yaml
-# Pulumi.yaml - Enable type checking
+# Pulumi.yaml
 runtime:
   name: python
   options:
     typechecker: mypy  # or pyright
-```
-
-### Input Type Options
-
-```python
-# Using Args classes (type-safe)
-bucket = aws.s3.Bucket(
-    "bucket",
-    versioning=aws.s3.BucketVersioningArgs(enabled=True),
-)
-
-# Using dict literals (concise)
-bucket = aws.s3.Bucket(
-    "bucket",
-    versioning={"enabled": True},
-)
 ```
 
 ## References
