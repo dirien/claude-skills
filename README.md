@@ -74,6 +74,8 @@ Each skill follows this structure:
 ```
 pulumi-{language}/
 ├── SKILL.md                           # Main skill definition
+├── evals/
+│   └── evals.json                     # Skill evaluation test cases
 └── references/
     ├── pulumi-esc.md                  # ESC patterns and commands
     ├── pulumi-patterns.md             # Infrastructure patterns
