@@ -9,35 +9,49 @@
       "name": "pulumi-typescript",
       "source": "./pulumi-typescript",
       "description": "Pulumi TypeScript skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": { "name": "Pulumi" }
     },
     {
       "name": "pulumi-go",
       "source": "./pulumi-go",
       "description": "Pulumi Go skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": { "name": "Pulumi" }
     },
     {
       "name": "pulumi-python",
       "source": "./pulumi-python",
       "description": "Pulumi Python skill for infrastructure as code with ESC, OIDC, and cloud provider best practices.",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": { "name": "Pulumi" }
     },
     {
       "name": "pulumi-neo",
       "source": "./pulumi-neo",
       "description": "Pulumi Neo AI agent skill for natural language infrastructure as code generation.",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": { "name": "Pulumi" }
     },
     {
       "name": "pulumi-cli",
       "source": "./pulumi-cli",
       "description": "Pulumi CLI command reference for infrastructure deployments and stack management.",
-      "version": "1.4.0",
+      "version": "1.5.0",
+      "author": { "name": "Pulumi" }
+    },
+    {
+      "name": "flux-cli",
+      "source": "./flux-cli",
+      "description": "Flux CD CLI reference for GitOps deployments, source management, and Kubernetes reconciliation.",
+      "version": "1.5.0",
+      "author": { "name": "Pulumi" }
+    },
+    {
+      "name": "flux-operator-cli",
+      "source": "./flux-operator-cli",
+      "description": "Flux Operator CLI reference for managing Flux CD deployments, FluxInstance resources, and GitOps pipelines.",
+      "version": "1.5.0",
       "author": { "name": "Pulumi" }
     }
   ]
