@@ -1,6 +1,6 @@
 # Claude Code Skills
 
-Custom [Claude Code](https://claude.ai/claude-code) skills for infrastructure as code development.
+Custom [Claude Code](https://claude.ai/claude-code) skills for infrastructure as code and GitOps development.
 
 ## Available Skills
 
@@ -11,6 +11,8 @@ Custom [Claude Code](https://claude.ai/claude-code) skills for infrastructure as
 | [pulumi-python](./pulumi-python/) | Pulumi IaC with Python, Pulumi Cloud & ESC |
 | [pulumi-neo](./pulumi-neo/) | Pulumi Neo AI agent for conversational infrastructure management |
 | [pulumi-cli](./pulumi-cli/) | Pulumi CLI command reference for deployments and stack management |
+| [flux-cli](./flux-cli/) | Flux CD CLI reference for GitOps bootstrapping, sources, kustomizations, and Helm releases |
+| [flux-operator-cli](./flux-operator-cli/) | Flux Operator CLI reference for building manifests, diffing YAML, and managing FluxInstance resources |
 
 ## Features
 
@@ -38,6 +40,8 @@ Add the marketplace and install individual skills:
 /plugin install pulumi-python@pulumi-skills
 /plugin install pulumi-neo@pulumi-skills
 /plugin install pulumi-cli@pulumi-skills
+/plugin install flux-cli@pulumi-skills
+/plugin install flux-operator-cli@pulumi-skills
 ```
 
 ### Option 2: Skills.sh
@@ -61,6 +65,8 @@ ln -s $(pwd)/claude-skills/pulumi-go ~/.claude/skills/pulumi-go
 ln -s $(pwd)/claude-skills/pulumi-python ~/.claude/skills/pulumi-python
 ln -s $(pwd)/claude-skills/pulumi-neo ~/.claude/skills/pulumi-neo
 ln -s $(pwd)/claude-skills/pulumi-cli ~/.claude/skills/pulumi-cli
+ln -s $(pwd)/claude-skills/flux-cli ~/.claude/skills/flux-cli
+ln -s $(pwd)/claude-skills/flux-operator-cli ~/.claude/skills/flux-operator-cli
 ```
 
 ### Option 4: Project-level skills
@@ -87,13 +93,17 @@ pulumi-{language}/
 
 ## Usage
 
-Once installed, the skills automatically activate when you work on Pulumi projects. For example:
+Once installed, the skills automatically activate when you work on Pulumi or Flux projects. For example:
 
 > "Create a Pulumi TypeScript project with ESC OIDC authentication to AWS"
 
 > "Set up a secure S3 bucket with encryption using Pulumi Python"
 
 > "Create a multi-language component for a VPC in Go"
+
+> "Bootstrap Flux on my Kubernetes cluster with GitHub"
+
+> "Create a HelmRelease for cert-manager with Flux"
 
 ## License
 
