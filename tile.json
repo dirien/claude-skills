@@ -1,7 +1,7 @@
 {
   "name": "dirien/pulumi-skills",
-  "version": "1.4.0",
-  "summary": "Pulumi infrastructure-as-code skills for Claude Code with ESC, OIDC, and cloud provider best practices.",
+  "version": "1.5.0",
+  "summary": "Pulumi infrastructure-as-code and Flux CD GitOps skills for Claude Code with ESC, OIDC, and cloud provider best practices.",
   "private": false,
   "skills": {
     "pulumi-typescript": {
@@ -18,6 +18,12 @@
     },
     "pulumi-cli": {
       "path": "pulumi-cli/SKILL.md"
+    },
+    "flux-cli": {
+      "path": "flux-cli/SKILL.md"
+    },
+    "flux-operator-cli": {
+      "path": "flux-operator-cli/SKILL.md"
     }
   }
 }
