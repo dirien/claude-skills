@@ -243,6 +243,27 @@ class GateCmdTest(helpers.TempDirMixin, unittest.TestCase):
         self.assertTrue(os.path.exists(g.steps[0]["log"]))
         self.assertFalse(g.ok)
 
+    def test_sandbox_hints_on_known_failures(self):
+        g = self.gate()
+        st, _ = g.cmd("n", "n", ["sh", "-c", "echo \"System.IO.IOException: 'NuGet-Migrations' at Mutex.CreateMutexCore\"; exit 1"], self.tmp)
+        self.assertEqual(st, "FAIL")
+        self.assertIn("NuGet-Migrations", g.steps[-1]["detail"])
+        self.assertIn("bootstrap.py", g.steps[-1]["detail"].splitlines()[-1])
+        st, _ = g.cmd("g", "g", ["sh", "-c", "echo 'Could not GET https://plugins.gradle.org/x: Connect timed out'; exit 1"], self.tmp)
+        self.assertEqual(st, "FAIL")
+        self.assertIn("gradle.properties", g.steps[-1]["detail"])
+        st, _ = g.cmd("o", "o", ["sh", "-c", "echo boom; exit 1"], self.tmp)
+        self.assertNotIn("hint:", g.steps[-1]["detail"])
+
+    def test_prepare_sandbox_for_creates_marker_and_properties(self):
+        prefix = os.path.join(self.tmp, "p")
+        env = {"HOME": self.tmp, "HTTPS_PROXY": "http://a:1", "GRADLE_USER_HOME": os.path.join(prefix, "gradle-home")}
+        self.assertEqual(verify.prepare_sandbox_for("dotnet", prefix, env), {})
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, ".local", "share", "NuGet", "Migrations", "1")))
+        verify.prepare_sandbox_for("java", prefix, env)
+        self.assertTrue(os.path.isfile(os.path.join(prefix, "gradle-home", "gradle.properties")))
+        self.assertEqual(verify.prepare_sandbox_for("nodejs", prefix, env), {})
+
     def test_java_warn_lines_and_cli_notice_are_warnings_not_failures(self):
         g = self.gate()
         script = ("echo 'WARN: secret property tokenId (property of config) does not have an Output type'; "
