@@ -1,0 +1,111 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-provider:
+    name: build provider (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+__PLATFORM_MATRIX__
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: provider/go.sum
+      - name: Cross-compile provider
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          cd provider
+          go build ./cmd/pulumi-resource-__PROVIDER__
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: provider/go.sum
+      - uses: pulumi/actions@v6
+        with:
+          pulumi-version: '3.241.0'
+      - name: Build provider
+        # `make provider` runs tfgen first, so this also regenerates the schema.
+        run: make provider
+      - name: Generate schema
+        run: make schema
+      - name: Verify schema and bridge metadata in repo match the generated ones
+        run: |
+          if ! git diff --exit-code provider/cmd/pulumi-resource-__PROVIDER__; then
+            echo "::error::schema.json or bridge-metadata.json is out of date. Run 'make schema' and commit the result."
+            exit 1
+          fi
+      - name: Run vet
+        run: make lint
+      - name: Verify go.mod and go.sum are tidy (provider and shim)
+        run: |
+          make tidy
+          if ! git diff --exit-code -- provider; then
+            echo "::error::go.mod/go.sum are not tidy. Run 'make tidy' and commit the result."
+            exit 1
+          fi
+      - name: Check copyright headers
+        run: make check_copyright
+      - name: Run tests
+        run: make test
+
+  build-sdks:
+    needs: test
+    name: build-sdks (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Each language SDK builds in its own parallel job. fail-fast: false
+      # so one language's failure does not cancel the others.
+      fail-fast: false
+      matrix:
+        language: [nodejs, python, go, dotnet, java]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: provider/go.sum
+      - uses: pulumi/actions@v6
+        with:
+          pulumi-version: '3.241.0'
+      - if: matrix.language == 'nodejs'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - if: matrix.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - if: matrix.language == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - if: matrix.language == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Generate ${{ matrix.language }} SDK
+        run: make ${{ matrix.language }}_sdk sdk_fixups
+      # Go has no separate build step: `make go_sdk` already runs
+      # `go mod tidy`, which validates the generated module compiles.
+      - if: matrix.language != 'go'
+        name: Build ${{ matrix.language }} SDK
+        run: make build_${{ matrix.language }}_sdk

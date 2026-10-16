@@ -198,6 +198,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--provider", required=True, help="provider slug")
     ap.add_argument("--repo", help="carved repo dir; parse its .github/workflows/release.yml instead of the vendored template")
+    ap.add_argument("--archetype", choices=sorted(render.ARCHETYPES), default="native",
+                    help="which vendored release.yml to parse when --repo is not given (the publishing jobs are the same in both)")
     ap.add_argument("--out-dir", help="also write each body to <out-dir>/NN.md and print `gh issue create` commands")
     ap.add_argument("--json", action="store_true", help="print the drafts as JSON")
     args = ap.parse_args(argv)
@@ -207,7 +209,8 @@ def main(argv=None):
             with open(os.path.join(args.repo, ".github", "workflows", "release.yml"), encoding="utf-8") as f:
                 text = f.read()
         else:
-            opts = render.make_options(args.provider, "unused", [])
+            opts = render.make_options(args.provider, "unused", [], archetype=args.archetype,
+                                       flavor="pf" if args.archetype == "bridged" else None)
             text = render.render_all(opts)[".github/workflows/release.yml"].decode("utf-8")
         issues = build_issues(args.provider, text)
     except (names.SlugError, WorkflowError, render.RenderError, OSError) as e:

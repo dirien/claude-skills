@@ -57,6 +57,12 @@ the targeting pack NuGet restores automatically (needs `api.nuget.org`; a
 exports `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`. Gradle 9 runs on JDK 17; the
 `sdk_fixups` target already moves the generated Java toolchain to 17.
 
+## Bridged repos
+
+A repo whose `.pulumi-labs-export.json` records `"archetype": "bridged"` runs the same gate; `make provider` runs tfgen first,
+`make test` has no `-race`, `go_module_paths` looks at `provider/`, and four steps are added (`metadata_diff`, `go_mod_tidy`,
+`binary_schema`, `dp_provider_info_defaults`). `--assert-pushable` requires them for a bridged repo. `bridged.md` has the table.
+
 ## Default-provider and credential checks (static, reported per item)
 
 | Step | Rule | Why |

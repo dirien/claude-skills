@@ -9,6 +9,11 @@ Reports ALL failures (not just the first) and exits 1 if there are any.
 Everything is derived from the provider recorded in .pulumi-labs-export.json
 by render.py; nothing is typed by hand.
 
+Two archetypes (references/bridged.md): a native pulumi-go-provider repo (root go.mod) and a
+Terraform-bridged one (provider/go.mod plus an in-repo shim module, committed schema and
+bridge metadata). The one in use is recorded in .pulumi-labs-export.json; a repo without the
+key is native.
+
 Drift detection for a repo produced by export.py (the generated mirror):
 
     python3 scripts/check.py --repo ../pulumi-modal --against-source ../autoregistry
@@ -39,7 +44,19 @@ REQUIRED_FILES = [
     "go.mod",
     "go.sum",
 ]
+# Bridged: the Go module lives in provider/ (next to the shim module), there is no root go.mod.
+BRIDGED_REQUIRED_FILES = [
+    "README.md",
+    "CLAUDE.md",
+    "docs/_index.md",
+    "docs/installation-configuration.md",
+    "provider/go.mod",
+    "provider/go.sum",
+    "provider/pkg/version/version.go",
+]
 REQUIRED_DIRS = ["examples", "sdk/dotnet", "sdk/go", "sdk/java", "sdk/nodejs", "sdk/python"]
+# The upstream Terraform provider's organisation, never ours (the bridge reads the upstream module's docs through it).
+BAD_GITHUB_ORG = re.compile(r'\bGitHubOrg:\s*"(pulumi|pulumi-labs)"')
 MAX_SCAN_BYTES = 8 * 1024 * 1024
 MAX_HITS = 100
 # Version the committed SDKs carry. `make sdks` defaults to it, export.py --generate passes it, and the release
@@ -149,9 +166,11 @@ def check_repo(repo, against_source=None):
         options = _read_json(opt_path)
         slug = options["provider"]
         n = names.derive(slug)
-        manifest = render.load_manifest()
-    except (ValueError, KeyError, names.SlugError) as e:
+        archetype = render.archetype_of(options)
+        manifest = render.load_manifest(archetype)
+    except (ValueError, KeyError, names.SlugError, render.RenderError) as e:
         return ["INVALID %s: %s. Re-run render.py." % (render.OPTIONS_FILE, e)]
+    bridged = archetype == "bridged"
 
     tracked = tracked_files(repo)
     if tracked is None:
@@ -164,8 +183,14 @@ def check_repo(repo, against_source=None):
         return tracked is None or rel in tracked
 
     # 1. Required files.
-    required = [e["target"] for e in manifest["files"]] + [render.OPTIONS_FILE] + REQUIRED_FILES + [
-        n["cmd_dir"] + "/main.go", n["schema_path"]]
+    try:
+        expected_opts = render.options_from_record(options, manifest)
+        archetype_targets = [t for t, _ in render.resolve_entries(expected_opts, manifest)]
+    except (render.RenderError, KeyError, TypeError) as e:
+        expected_opts, archetype_targets = None, []
+        fails.append("INVALID %s options: %s" % (render.OPTIONS_FILE, e))
+    required = archetype_targets + [render.OPTIONS_FILE] + (BRIDGED_REQUIRED_FILES if bridged else REQUIRED_FILES) + [
+        n["cmd_dir"] + "/main.go", n["schema_path"]] + ([n["bridge_metadata_path"]] if bridged else [])
     for rel in required:
         if not exists(rel):
             fails.append("MISSING required file: %s" % rel)
@@ -183,9 +208,7 @@ def check_repo(repo, against_source=None):
         fails.append("ARCHETYPE CHANGED: repo was rendered from %s@%s but this skill vendors %s@%s. Re-run render.py --repo-dir %s and review the diff."
                      % (options.get("archetype_repo"), options.get("archetype_sha"), manifest["archetype_repo"], manifest["archetype_sha"], repo))
     try:
-        expected = render.render_all(render.make_options(
-            slug, options.get("display_name"),
-            [(e["platform"], e["reason"]) for e in options.get("exclude_platforms", [])], manifest), manifest)
+        expected = render.render_all(expected_opts, manifest) if expected_opts else {}
     except (render.RenderError, KeyError, TypeError) as e:
         expected = {}
         fails.append("INVALID %s options: %s" % (render.OPTIONS_FILE, e))
@@ -200,18 +223,25 @@ def check_repo(repo, against_source=None):
                          "report it to a human.\n%s" % (rel, repo, _first_diff(want, got)))
 
     # 3. Forbidden files.
-    for rel in ("version.txt", "provider/version.txt", "provider/go.mod"):
-        if exists(rel):
-            fails.append("FORBIDDEN file: %s (remove it; the module lives at the repo root and the version comes from the git tag)" % rel)
     pdir = os.path.join(repo, "provider")
-    for root, _, files in os.walk(pdir):
-        if "go.mod" in files:
-            rel = os.path.relpath(os.path.join(root, "go.mod"), repo)
-            if rel != "provider/go.mod":
-                fails.append("FORBIDDEN file: %s (no go.mod anywhere under provider/)" % rel)
+    if bridged:
+        for rel in ("version.txt", "provider/version.txt", "go.mod", "go.sum"):
+            if exists(rel):
+                fails.append("FORBIDDEN file: %s (a bridged mirror has its Go module in provider/ and no root module; "
+                             "the version comes from the git tag)" % rel)
+    else:
+        for rel in ("version.txt", "provider/version.txt", "provider/go.mod"):
+            if exists(rel):
+                fails.append("FORBIDDEN file: %s (remove it; the module lives at the repo root and the version comes from the git tag)" % rel)
+        for root, _, files in os.walk(pdir):
+            if "go.mod" in files:
+                rel = os.path.relpath(os.path.join(root, "go.mod"), repo)
+                if rel != "provider/go.mod":
+                    fails.append("FORBIDDEN file: %s (no go.mod anywhere under provider/)" % rel)
 
-    # 4. Root go.mod module.
-    gomod = os.path.join(repo, "go.mod")
+    # 4. Go module: root go.mod (native) or provider/go.mod plus the in-tree replaces (bridged).
+    gomod = os.path.join(repo, "provider/go.mod" if bridged else "go.mod")
+    want_module = n["provider_module"] if bridged else n["go_module"]
     if os.path.exists(gomod):
         m = None
         with open(gomod, encoding="utf-8", errors="replace") as f:
@@ -220,8 +250,29 @@ def check_repo(repo, against_source=None):
                 if mm:
                     m = mm.group(1).strip('"')
                     break
-        if m != n["go_module"]:
-            fails.append("WRONG go.mod module: got %r, want %r" % (m, n["go_module"]))
+        if m != want_module:
+            fails.append("WRONG %s module: got %r, want %r" % ("provider/go.mod" if bridged else "go.mod", m, want_module))
+    if bridged:
+        mods = {}
+        for root, dns, files in os.walk(pdir):
+            dns[:] = [d for d in dns if d not in gomodlib.SKIP_DIRS]
+            if "go.mod" in files:
+                rel = os.path.relpath(os.path.join(root, "go.mod"), repo).replace(os.sep, "/")
+                with open(os.path.join(root, "go.mod"), encoding="utf-8", errors="replace") as f:
+                    mods[rel] = f.read()
+        known = {rel: None for rel in mods}
+        for rel, text in sorted(mods.items()):
+            for msg in gomodlib.check_local_replaces(known, rel, text):
+                fails.append("BAD replace: " + msg)
+        for root, _, files in os.walk(pdir):
+            for fn in files:
+                if fn.endswith(".go") and not fn.endswith("_test.go"):
+                    full = os.path.join(root, fn)
+                    with open(full, encoding="utf-8", errors="replace") as f:
+                        for lineno, line in enumerate(f, 1):
+                            if BAD_GITHUB_ORG.search(line):
+                                fails.append("WRONG GitHubOrg in %s:%d: it names the UPSTREAM Terraform provider's organisation "
+                                             "(the require line of the shim), never pulumi or pulumi-labs" % (os.path.relpath(full, repo), lineno))
 
     # 5. Schema vs naming table.
     schema_path = os.path.join(repo, n["schema_path"])

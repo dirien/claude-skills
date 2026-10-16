@@ -23,6 +23,14 @@ provider's *_test.go files. It never touches the provider's non-test Go code
 CHANGELOG.md or carved-providers.json. It is idempotent: a second run changes
 nothing. Afterwards it prints what is left for the agent to do by hand.
 
+Terraform-bridged providers (a provider/cmd/pulumi-tfgen-<p> command exists, references/bridged.md)
+are detected automatically. Their identity lives in the tfbridge.ProviderInfo literal instead of an
+infer builder chain: --check reads Publisher, Repository, PluginDownloadURL, GitHubOrg,
+JavaScript.PackageName, Python.PackageName, CSharp.RootNamespace, Java.BasePackage and
+Golang.ImportBasePath (plus the RespectSchemaVersion flags the SDK version stamping needs) and reports
+what is wrong. The module path github.com/pulumi/pulumi-<p>/provider is NOT a hit: export.py rewrites it.
+GitHubOrg is the upstream Terraform provider's organisation and must never be a pulumi one.
+
 Names come from names.py. The script reads and writes the working tree only;
 it never uses git, gh or the network.
 """
@@ -42,6 +50,10 @@ ENTRY_KEYS = ("name", "repo", "goModule", "mode", "registryName", "listed",
               "exportedAt", "lastSyncedCommit", "lastSyncedVersion")
 # What export.py copies from lib/providers/<p>/ (the only files that ever reach the mirror).
 SCAN_TREES = ("provider/cmd", "provider/pkg", "examples", "templates", "docs")
+# A bridged export copies the whole provider/ tree (go.mod, resources.go, shim/), minus the files the archetype owns.
+BRIDGED_SCAN_TREES = ("provider", "examples", "templates", "docs")
+BRIDGED_OWNED = ("provider/cmd/pulumi-resource-{p}/main.go", "provider/cmd/pulumi-resource-{p}/schema.json",
+                 "provider/cmd/pulumi-tfgen-{p}/main.go")
 SCAN_FILES = ("README.md", "CHANGELOG.md")
 SKIP_DIRS = {"node_modules", "bin", "obj", "vendor", ".git", "venv", "__pycache__", "dist", ".pulumi", ".gradle", "build"}
 SKIP_FILES = {"go.sum"}
@@ -58,6 +70,8 @@ CAT_META = "builder metadata"
 CAT_COPY = "copyright header"
 CAT_DOCS = "docs page"
 CAT_CARVED = "carved-providers.json"
+CAT_VERSION = "version.txt"
+CAT_CMD = "cmd main.go shape"
 
 APPLY = "apply"      # --apply fixes it
 MANUAL = "manual"    # the agent edits it by hand
@@ -78,8 +92,12 @@ class Hit:
 
 
 @functools.lru_cache(maxsize=None)
-def rules(slug):
-    """Return [(category, compiled regex, replacement)] for the string-for-string rewrites of one provider."""
+def rules(slug, bridged=False):
+    """Return [(category, compiled regex, replacement)] for the string-for-string rewrites of one provider.
+
+    For a bridged provider the vanity module path github.com/pulumi/pulumi-<p>/provider is left alone: export.py rewrites it
+    in every Go file and in go.mod, so rewriting only some of the occurrences here would break the monorepo build.
+    """
     n = names.derive(slug)
     p = re.escape(slug)
     under = re.escape(slug.replace("-", "_"))
@@ -88,7 +106,8 @@ def rules(slug):
     java_names = sorted({slug, slug.replace("-", ""), slug.replace("-", "_")}, key=lambda x: (-len(x), x))
     java = "|".join(re.escape(x) for x in java_names)
     return [
-        (CAT_GO, re.compile(r"github\.com/pulumi/pulumi-" + p + tail), "github.com/pulumi-labs/pulumi-" + slug),
+        (CAT_GO, re.compile(r"github\.com/pulumi/pulumi-" + p + tail + (r"(?!/provider(?![A-Za-z0-9_-]))" if bridged else "")),
+         "github.com/pulumi-labs/pulumi-" + slug),
         (CAT_NPM, re.compile(r"@pulumi/" + p + tail), "@pulumi-labs/" + slug),
         (CAT_PY, re.compile(r"(?<![A-Za-z0-9_])pulumi_" + under + r"(?![A-Za-z0-9_])"), n["python_package"]),
         (CAT_NUGET, re.compile(r"(?<!Labs\.)(?<![A-Za-z0-9_])Pulumi\." + pas + r"(?![A-Za-z0-9_])"), n["dotnet_package"]),
@@ -115,17 +134,25 @@ def is_text(data):
     return b"\0" not in data[:8192]
 
 
-def provider_files(pdir):
+def is_bridged(pdir, slug):
+    """True when the provider has a tfgen command (a pulumi-terraform-bridge provider)."""
+    return os.path.isdir(os.path.join(pdir, "provider", "cmd", "pulumi-tfgen-" + slug))
+
+
+def provider_files(pdir, bridged=False, slug=None):
     """Yield (rel, abs) of every text file export.py copies, sorted."""
     out = []
-    for tree in SCAN_TREES:
+    owned = {x.format(p=slug) for x in BRIDGED_OWNED} if bridged and slug else set()
+    for tree in (BRIDGED_SCAN_TREES if bridged else SCAN_TREES):
         base = os.path.join(pdir, tree)
         for dp, dns, fns in os.walk(base):
             dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
             for fn in sorted(fns):
                 if fn not in SKIP_FILES:
                     full = os.path.join(dp, fn)
-                    out.append((os.path.relpath(full, pdir).replace(os.sep, "/"), full))
+                    rel = os.path.relpath(full, pdir).replace(os.sep, "/")
+                    if rel not in owned:
+                        out.append((rel, full))
     for fn in SCAN_FILES:
         full = os.path.join(pdir, fn)
         if os.path.isfile(full):
@@ -165,7 +192,7 @@ def _snippet(line):
     return line.strip()[:120]
 
 
-def text_hits(slug, rel, text):
+def text_hits(slug, rel, text, bridged=False):
     """Old-identity hits of one file's text."""
     hits = []
     fix = APPLY if apply_scope(rel) else MANUAL
@@ -176,9 +203,9 @@ def text_hits(slug, rel, text):
     lines = text.splitlines()
     for i, line in enumerate(lines, 1):
         scan = line
-        if is_go:  # export.py rewrites the monorepo provider module path itself in every Go file
+        if is_go and not bridged:  # export.py rewrites the monorepo provider module path itself in every Go file
             scan = scan.replace(own_module, "")
-        for cat, rx, _ in rules(slug):
+        for cat, rx, _ in rules(slug, bridged):
             if rx.search(scan):
                 hits.append(Hit(rel, i, cat, _snippet(line), fix))
         if cat_repo_generic(scan) and not any(h.line == i and h.category == CAT_REPO for h in hits):
@@ -233,8 +260,147 @@ def builder_hits(slug, pdir):
     return hits
 
 
-def copyright_hits(pdir):
+def go_block(text, open_idx):
+    """Return the text of the {...} block whose opening brace is at open_idx (strings and // comments skipped), or None."""
+    depth, i, quote = 0, open_idx, None
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == "\\" and quote != "`":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+        elif c in "\"`":
+            quote = c
+        elif text.startswith("//", i):
+            i = text.find("\n", i)
+            if i < 0:
+                return None
+            continue
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_idx:i + 1]
+        i += 1
+    return None
+
+
+def _sub_block(info, field, typ):
+    """Return the nested `Field: &tfbridge.Typ{...}` block inside the ProviderInfo text, or None."""
+    m = re.search(r"\b%s:\s*&tfbridge\.%s\{" % (field, typ), info)
+    return go_block(info, m.end() - 1) if m else None
+
+
+def _str_field(block, name):
+    m = re.search(r"\b%s:\s*\"([^\"\n]*)\"" % name, block or "")
+    return m.group(1) if m else None
+
+
+def provider_info_hits(slug, pdir):
+    """Checks on the tfbridge.ProviderInfo literal of a bridged provider (the bridged counterpart of builder_hits)."""
+    n = names.derive(slug)
     hits = []
+    found = False
+    for rel, full in provider_files(pdir, True, slug):
+        if not (is_builder_code(rel) and rel.count("/") == 1):
+            continue
+        text = read_text(full)
+        m = re.search(r"tfbridge\.ProviderInfo\{", text or "")
+        if not m:
+            continue
+        found = True
+        info = go_block(text, m.end() - 1) or ""
+        line = _line_of(text, m.start())
+
+        base = m.end() - 1
+
+        def at(needle, within=info, offset=0):
+            """Absolute position in text of the first match of regex needle in within (a slice of info starting at offset), else None."""
+            hm = re.search(needle, within)
+            return base + offset + hm.start() if hm else None
+
+        def hit(msg, pos=None):
+            hits.append(Hit(rel, _line_of(text, pos) if pos is not None else line, CAT_META, msg, MANUAL))
+
+        for field, want in (("Publisher", n["publisher"]), ("Repository", n["repo_url"]), ("PluginDownloadURL", n["plugin_download_url"])):
+            got = _str_field(info, field)
+            if got is None:
+                hit("ProviderInfo.%s is not set to the string %r" % (field, want), at(r"\b%s:" % field))
+            elif got != want:
+                hit("ProviderInfo.%s is %r, want %r" % (field, got, want), at(r"\b%s:" % field))
+        org = re.search(r'\bGitHubOrg:\s*"(pulumi|pulumi-labs)"', info)
+        if org:
+            hit("GitHubOrg is the UPSTREAM Terraform provider's org (the require line of the shim), never pulumi or pulumi-labs",
+                m.end() - 1 + org.start())
+        desc = _str_field(info, "Description")
+        if desc is not None and "experimental" not in desc.lower():
+            hit('ProviderInfo.Description must say "experimental" (it becomes the schema description and the npm packageDescription)',
+                at(r"\bDescription:"))
+        specs = (("JavaScript", "JavaScriptInfo", (("PackageName", n["npm_package"]),)),
+                 ("Python", "PythonInfo", (("PackageName", n["python_package"]),)),
+                 ("CSharp", "CSharpInfo", (("RootNamespace", n["dotnet_root_namespace"]),)),
+                 ("Java", "JavaInfo", (("BasePackage", n["java_base_package"]),)),
+                 ("Golang", "GolangInfo", (("ImportBasePath", n["go_import_base_path"]),)))
+        for field, typ, wants in specs:
+            blk = _sub_block(info, field, typ)
+            if blk is None:
+                hit("ProviderInfo.%s (&tfbridge.%s{...}) is missing" % (field, typ))
+                continue
+            boff = info.find(blk)
+            for key, want in wants:
+                got = _str_field(blk, key)
+                if got is None:
+                    if not (key == "ImportBasePath" and re.search(r"\bImportBasePath:", blk)):  # path.Join(...) is checked on the schema
+                        hit("%s.%s is not set to the string %r" % (field, key, want), at(r"\b%s:" % key, blk, boff))
+                elif got != want:
+                    hit("%s.%s is %r, want %r" % (field, key, got, want), at(r"\b%s:" % key, blk, boff))
+            if field != "Java" and not re.search(r"\bRespectSchemaVersion:\s*true", blk):
+                hit("%s.RespectSchemaVersion must be true: without it `gen-sdk --version` is ignored and the SDK keeps ${VERSION} "
+                    "(the .NET build then fails for want of version.txt)" % field, base + boff)
+            if field == "Python" and not re.search(r"\bPyProject:", blk):
+                hit("Python.PyProject must be enabled (PyProject: struct{ Enabled bool }{true}): the Python SDK publish needs pyproject.toml",
+                    base + boff)
+    if not found:
+        hits.append(Hit("provider", 0, CAT_META, "no tfbridge.ProviderInfo{...} literal found in provider/*.go", MANUAL))
+    return hits
+
+
+def version_hits(pdir):
+    """A mirrored bridged provider needs a version.txt (0.x.y): the monorepo otherwise versions it by git tag only."""
+    path = os.path.join(pdir, "version.txt")
+    if not os.path.isfile(path):
+        return [Hit("version.txt", 0, CAT_VERSION, "missing: a mirrored bridged provider needs version.txt (0.x.y); a sync is triggered when it moves", MANUAL)]
+    with open(path, encoding="utf-8") as f:
+        v = f.read().strip()
+    if not re.match(r"^0\.\d+\.\d+$", v):
+        return [Hit("version.txt", 1, CAT_VERSION, "is %r: while experimental it must be 0.x.y" % v, MANUAL)]
+    return []
+
+
+def cmd_hits(slug, pdir):
+    """The archetype replaces the cmd mains; they must be the plain shape (see export.cmd_main_problems)."""
+    import export  # lazy: export imports check, which has no dependency on this module
+    hits = []
+    try:
+        flavor = export.bridged_flavor(pdir, slug)
+    except export.ExportError as e:
+        return [Hit("provider/cmd", 0, CAT_CMD, str(e), MANUAL)]
+    for kind, rel in (("resource", "provider/cmd/pulumi-resource-%s/main.go" % slug), ("tfgen", "provider/cmd/pulumi-tfgen-%s/main.go" % slug)):
+        text = read_text(os.path.join(pdir, rel))
+        if text is None:
+            hits.append(Hit(rel, 0, CAT_CMD, "missing", MANUAL))
+            continue
+        for msg in export.cmd_main_problems(text, kind, flavor, slug):
+            hits.append(Hit(rel, 0, CAT_CMD, msg, MANUAL))
+    return hits
+
+
+def copyright_hits(pdir, bridged=False, slug=None):
+    hits = []
+    owned = {x.format(p=slug) for x in BRIDGED_OWNED} if bridged and slug else set()
     base = os.path.join(pdir, "provider")
     for dp, dns, fns in os.walk(base):
         dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
@@ -244,6 +410,8 @@ def copyright_hits(pdir):
                 text = read_text(full)
                 if text is not None and not COPYRIGHT_RE.search(text):
                     rel = os.path.relpath(full, pdir).replace(os.sep, "/")
+                    if rel in owned:
+                        continue
                     hits.append(Hit(rel, 1, CAT_COPY, 'missing "Copyright ... Pulumi Corporation" header', MANUAL))
     return hits
 
@@ -289,21 +457,27 @@ def scan(mono, slug):
     """Return every remaining Hit for lib/providers/<slug> under the monorepo checkout mono."""
     names.validate_slug(slug)
     pdir = provider_dir(mono, slug)
+    bridged = is_bridged(pdir, slug)
     hits = []
-    for rel, full in provider_files(pdir):
+    for rel, full in provider_files(pdir, bridged, slug):
         text = read_text(full)
         if text is not None:
-            hits.extend(text_hits(slug, rel, text))
-    hits.extend(builder_hits(slug, pdir))
-    hits.extend(copyright_hits(pdir))
+            hits.extend(text_hits(slug, rel, text, bridged))
+    if bridged:
+        hits.extend(provider_info_hits(slug, pdir))
+        hits.extend(cmd_hits(slug, pdir))
+        hits.extend(version_hits(pdir))
+    else:
+        hits.extend(builder_hits(slug, pdir))
+    hits.extend(copyright_hits(pdir, bridged, slug))
     hits.extend(docs_hits(pdir))
     hits.extend(carved_hits(mono, slug))
     return hits
 
 
-def rewrite_text(slug, rel, text):
+def rewrite_text(slug, rel, text, bridged=False):
     """Return text with every mechanical rewrite applied (string for string)."""
-    for _, rx, repl in rules(slug):
+    for _, rx, repl in rules(slug, bridged):
         text = rx.sub(repl, text)
     xml, gradle = maven_rule(slug)
     text = xml.sub(r"\1com.pulumi.labs\2", text)
@@ -322,8 +496,9 @@ def apply(mono, slug):
     """Perform the mechanical rewrites; return {rel: number of changed lines} for the files that changed."""
     names.validate_slug(slug)
     pdir = provider_dir(mono, slug)
+    bridged = is_bridged(pdir, slug)
     changed = {}
-    for rel, full in provider_files(pdir):
+    for rel, full in provider_files(pdir, bridged, slug):
         if not apply_scope(rel):
             continue
         with open(full, "rb") as f:
@@ -331,7 +506,7 @@ def apply(mono, slug):
         if not is_text(raw):
             continue
         old = raw.decode("utf-8", "replace")
-        new = rewrite_text(slug, rel, old)
+        new = rewrite_text(slug, rel, old, bridged)
         if new != old:
             n_lines = sum(1 for a, b in zip(old.split("\n"), new.split("\n")) if a != b)
             with open(full, "wb") as f:

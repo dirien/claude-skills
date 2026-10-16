@@ -216,3 +216,209 @@ def env(**kw):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+# ----------------------------------------------------------------- bridged archetype fixtures
+
+BRIDGED_VANITY = "github.com/pulumi/pulumi-%s/provider"
+BRIDGED_SHIM = "github.com/example/terraform-provider-%s/pulumi-bridge-shim"
+
+
+def bridged_resources_go(slug="demo", display="Demo", switched=True):
+    """Return a resources.go with a tfbridge.ProviderInfo literal, in the monorepo shape (switched: pulumi-labs identity)."""
+    n = names.derive(slug)
+    pub = "Pulumi Labs" if switched else "Pulumi"
+    repo = n["repo_url"] if switched else "https://github.com/pulumi/autoregistry"
+    url = n["plugin_download_url"] if switched else "github://api.github.com/pulumi/autoregistry"
+    npm = n["npm_package"] if switched else "@pulumi/" + slug
+    py = n["python_package"] if switched else "pulumi_" + slug.replace("-", "_")
+    cs = n["dotnet_root_namespace"] if switched else "Pulumi"
+    java = n["java_base_package"] if switched else "com.pulumi"
+    go = n["go_import_base_path"] if switched else "github.com/pulumi/pulumi-%s/sdk/go/%s" % (slug, n["go_pkg"])
+    rsv = "RespectSchemaVersion: true,\n\t\t\t" if switched else ""
+    pyproj = "PyProject: struct{ Enabled bool }{true}," if switched else ""
+    desc = "Experimental: manage Demo." if switched else "Manage Demo."
+    return GO_HEADER + '''// Package %(pkg)s is the bridged provider.
+package %(pkg)s
+
+import (
+	pf "github.com/pulumi/pulumi-terraform-bridge/v3/pkg/pf/tfbridge"
+	"github.com/pulumi/pulumi-terraform-bridge/v3/pkg/tfbridge"
+
+	shim "%(shim)s"
+	"%(vanity)s/pkg/version"
+)
+
+// Version is the provider version.
+var Version = version.Version
+
+// Provider returns the ProviderInfo.
+func Provider() tfbridge.ProviderInfo {
+	return tfbridge.ProviderInfo{
+		P:           pf.ShimProvider(shim.NewProvider()),
+		Name:        "%(slug)s",
+		DisplayName: "%(display)s",
+		Publisher:   "%(pub)s",
+		Description: "%(desc)s",
+		License:     "Apache-2.0",
+		Repository:  "%(repo)s",
+		PluginDownloadURL: "%(url)s",
+		Config: map[string]*tfbridge.SchemaInfo{
+			"api_key": {
+				Default: &tfbridge.DefaultInfo{
+					EnvVars: []string{"DEMO_API_KEY"},
+				},
+			},
+		},
+		JavaScript: &tfbridge.JavaScriptInfo{
+			PackageName: "%(npm)s",
+			%(rsv)sDependencies: map[string]string{"@pulumi/pulumi": "^3.0.0"},
+		},
+		Python: &tfbridge.PythonInfo{
+			PackageName: "%(py)s",
+			%(rsv)s%(pyproj)s
+		},
+		Golang: &tfbridge.GolangInfo{
+			ImportBasePath: "%(go)s",
+			%(rsv)sGenerateResourceContainerTypes: true,
+		},
+		CSharp: &tfbridge.CSharpInfo{
+			RootNamespace: "%(cs)s",
+			%(rsv)sPackageReferences: map[string]string{"Pulumi": "3.*"},
+		},
+		Java: &tfbridge.JavaInfo{
+			BasePackage: "%(java)s",
+		},
+	}
+}
+''' % {"pkg": slug.replace("-", ""), "shim": BRIDGED_SHIM % slug, "vanity": BRIDGED_VANITY % slug, "slug": slug,
+       "display": display, "pub": pub, "desc": desc, "repo": repo, "url": url, "npm": npm, "py": py, "go": go, "cs": cs,
+       "java": java, "rsv": rsv, "pyproj": pyproj}
+
+
+BRIDGED_RESOURCE_MAIN_PF = GO_HEADER + '''// Command pulumi-resource-demo is the provider resource server binary.
+package main
+
+import (
+	"context"
+
+	demo "github.com/pulumi/pulumi-demo/provider"
+	pf "github.com/pulumi/pulumi-terraform-bridge/v3/pkg/pf/tfbridge"
+)
+
+// PackageSchema is a placeholder.
+var PackageSchema = []byte("{}")
+
+func main() {
+	meta := pf.ProviderMetadata{PackageSchema: PackageSchema}
+	pf.Main(context.Background(), "demo", demo.Provider(), meta)
+}
+'''
+BRIDGED_TFGEN_MAIN_PF = GO_HEADER + '''// Command pulumi-tfgen-demo generates the schema.
+package main
+
+import (
+	demo "github.com/pulumi/pulumi-demo/provider"
+	pftfgen "github.com/pulumi/pulumi-terraform-bridge/v3/pkg/pf/tfgen"
+)
+
+func main() {
+	pftfgen.Main("demo", demo.Provider())
+}
+'''
+BRIDGED_RESOURCE_MAIN_SDKV2 = GO_HEADER + '''// Command pulumi-resource-demo is the provider resource server binary.
+package main
+
+import (
+	demo "github.com/pulumi/pulumi-demo/provider"
+	"github.com/pulumi/pulumi-terraform-bridge/v3/pkg/tfbridge"
+)
+
+func main() {
+	prov := demo.Provider()
+	tfbridge.Main("demo", demo.Version, prov, nil)
+}
+'''
+BRIDGED_TFGEN_MAIN_SDKV2 = GO_HEADER + '''// Command pulumi-tfgen-demo generates the schema.
+package main
+
+import (
+	demo "github.com/pulumi/pulumi-demo/provider"
+	tfgen "github.com/pulumi/pulumi-terraform-bridge/v3/pkg/tfgen"
+)
+
+func main() {
+	tfgen.Main("demo", demo.Version, demo.Provider())
+}
+'''
+
+
+def build_bridged_monorepo(root, slug="demo", display="Demo", version="0.1.0", flavor="pf", switched=True):
+    """Create a synthetic autoregistry checkout with a Terraform-bridged lib/providers/<slug> (the monorepo shape).
+
+    The provider module is the vanity path github.com/pulumi/pulumi-<slug>/provider and reaches its shim module through
+    a relative replace. switched=True carries the pulumi-labs identity (state after the identity-switch PR).
+    """
+    mono = os.path.join(root, "autoregistry")
+    os.makedirs(mono)
+    subprocess.run(["git", "init", "-q", "-b", "main", mono], check=True)
+    n = names.derive(slug)
+    base = "lib/providers/%s/" % slug
+    mod = BRIDGED_VANITY % slug
+    shim = BRIDGED_SHIM % slug
+    write(mono, "carved-providers.json", json.dumps([{
+        "name": slug, "repo": n["repo"], "goModule": n["go_module"], "mode": "mirror", "registryName": slug,
+        "listed": False, "exportedAt": None, "lastSyncedCommit": None, "lastSyncedVersion": None}], indent=2) + "\n")
+    write(mono, "README.md", "monorepo root, must never be copied\n")
+    if version:
+        write(mono, base + "version.txt", version + "\n")
+    write(mono, base + "Makefile", "# MONOREPO MAKEFILE MARKER\nbuild:\n\techo hi\n")
+    write(mono, base + ".gitignore", "# MONOREPO GITIGNORE MARKER\nschema.json\nsdk/\n")
+    write(mono, base + "README.md", "# Demo\n\n> **Experimental.** Demo provider.\n")
+    write(mono, base + "CHANGELOG.md", "# Changelog\n\n- first\n")
+    write(mono, base + "skills/SKILLS.md", "# Demo dev guide\n\nBuild with make.\n")
+    write(mono, base + "docs/_index.md", "---\ntitle: Demo\nmeta_desc: x\nlayout: package\n---\n")
+    write(mono, base + "docs/installation-configuration.md", "---\ntitle: Demo\nmeta_desc: x\nlayout: package\n---\n")
+    write(mono, base + "provider/go.mod", "module %s\n\ngo 1.27\n\nrequire (\n\t%s v0.0.0\n\tgithub.com/pulumi/pulumi-terraform-bridge/v3 v3.125.0\n)\n\n"
+          "replace %s => ./shim\n\nreplace github.com/hashicorp/terraform-plugin-sdk/v2 => github.com/pulumi/terraform-plugin-sdk/v2 v2.0.0-20260318212141-5525259d096b\n"
+          % (mod, shim, shim))
+    write(mono, base + "provider/go.sum", "github.com/pulumi/pulumi-terraform-bridge/v3 v3.125.0 h1:abc=\n")
+    write(mono, base + "provider/resources.go", bridged_resources_go(slug, display, switched))
+    write(mono, base + "provider/resources_test.go", GO_HEADER + 'package %s_test\n\nimport (\n\t"testing"\n\n\t%s "%s"\n)\n\n'
+          'func TestProvider(t *testing.T) { _ = %s.Provider() }\n' % (n["go_pkg"], n["go_pkg"], mod, n["go_pkg"]))
+    write(mono, base + "provider/pkg/version/version.go", GO_HEADER + 'package version\n\n// Version is the dev default.\nvar Version = "0.0.1-alpha.0"\n')
+    mains = {"pf": (BRIDGED_RESOURCE_MAIN_PF, BRIDGED_TFGEN_MAIN_PF), "sdkv2": (BRIDGED_RESOURCE_MAIN_SDKV2, BRIDGED_TFGEN_MAIN_SDKV2)}[flavor]
+    for text, rel in zip(mains, ("provider/cmd/pulumi-resource-%s/main.go", "provider/cmd/pulumi-tfgen-%s/main.go")):
+        write(mono, base + rel % slug, text.replace("demo", slug).replace("pulumi/pulumi-" + slug, "pulumi/pulumi-" + slug))
+    write(mono, base + "provider/cmd/pulumi-resource-%s/bridge-metadata.json" % slug, "{}")
+    write(mono, base + "provider/shim/go.mod", "module %s\n\ngo 1.27\n" % shim)
+    write(mono, base + "provider/shim/go.sum", "")
+    write(mono, base + "provider/shim/shim.go", GO_HEADER + "package shim\n\n// NewProvider returns the upstream provider.\nfunc NewProvider() int { return 0 }\n")
+    write(mono, base + "examples/%s-go/main.go" % slug, GO_HEADER + 'package main\n\nimport _ "%s/sdk/go/%s"\n\nfunc main() {}\n' % (
+        n["go_module"] if switched else "github.com/pulumi/pulumi-" + slug, n["go_pkg"]))
+    write(mono, base + "examples/%s-go/go.mod" % slug, "module example\n\ngo 1.27\n\nrequire %s v0.1.0\n" % n["go_import_base_path"])
+    write(mono, base + "templates/%s-go/Pulumi.yaml" % slug, "name: t\nruntime: go\n")
+    commit_all(mono, "bridged monorepo fixture")
+    return mono
+
+
+def build_bridged_mirror(root, mono, slug="demo", name="mirror"):
+    """Export slug from the bridged fixture monorepo into a fresh git repo and add stub generated files; return (repo, options).
+
+    The stubs stand in for `make schema` and `make sdks` (which need the Go and Pulumi toolchains), so check.py can run.
+    """
+    import export  # noqa: E402  (imported lazily: export imports check, which tests patch)
+    out = build_out(root, name)
+    options = export.export(mono, slug, out, skill_commit=None)
+    n = names.derive(slug)
+    write(out, n["schema_path"], json.dumps(schema_for(slug), indent=2) + "\n")
+    write(out, n["cmd_dir"] + "/Pulumi.yaml", "name: %s\nlanguage: schema\n" % slug)
+    write(out, n["dotnet_csproj"], "<Project/>\n")
+    write(out, n["go_sdk_dir"] + "/doc.go", "package x\n")
+    write(out, n["go_sdk_dir"] + "/go.mod", "module %s\n\ngo 1.27\n" % n["go_import_base_path"])
+    for lang in ("java", "nodejs", "python"):
+        write(out, "sdk/%s/placeholder.txt" % lang, "x\n")
+    write(out, "sdk/nodejs/package.json", json.dumps({"name": n["npm_package"], "version": "0.0.1-dev"}, indent=2) + "\n")
+    write(out, "sdk/dotnet/version.txt", "0.0.1-dev\n")
+    commit_all(out, "export")
+    return out, options

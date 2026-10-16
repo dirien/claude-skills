@@ -1,5 +1,9 @@
 # The archetype
 
+This page describes the native archetype. Terraform-bridged providers use a second one,
+`archetype-bridged/`, documented in `bridged.md`; it shares `LICENSE`, `mise.toml`, `.gitignore`,
+`.vscode/launch.json` and `scripts/fixup_python_input_optional.py` with this one and the publishing jobs of `release.yml`.
+
 `pulumi-labs/pulumi-nvidia-aicr`, vendored at commit
 `1d262e3db83fd120e8454b9162e762eaf743de8d` (see `archetype/manifest.json`).
 Every vendored file is stored with a `.tmpl` suffix so that Go, GitHub
