@@ -5,6 +5,7 @@ import unittest
 import helpers
 import gomod
 import names
+import secret_scan
 import verify
 
 
@@ -37,12 +38,11 @@ class SchemaChecksTest(unittest.TestCase):
                          [("config.defaults", "FAIL"), ("provider.requiredInputs", "FAIL")])
 
 
-class SdkVersionTest(unittest.TestCase):
-    def test_placeholder_is_not_a_version(self):
-        for bad in (None, "", "${VERSION}", "latest", 3):
-            self.assertFalse(verify.real_sdk_version(bad), bad)
-        for good in ("0.1.0", "0.0.1-dev", "1.2.3+build.5"):
-            self.assertTrue(verify.real_sdk_version(good), good)
+class SdkVersionStepTest(unittest.TestCase):
+    def test_gate_requires_the_sdk_version_step_and_uses_the_dev_version(self):
+        self.assertIn("sdk_version", verify.REQUIRED_STEPS)
+        self.assertEqual(verify.check.SDK_DEV_VERSION, "0.0.1-dev")
+        self.assertGreaterEqual(verify.GATE_VERSION, 2)
 
 
 class EnvTagTest(unittest.TestCase):
@@ -216,6 +216,12 @@ class GoHelpersTest(helpers.TempDirMixin, unittest.TestCase):
         w = verify.metadata_warnings(old, n)
         self.assertEqual(len(w), 4)
         self.assertEqual(verify.metadata_warnings(helpers.schema_for("modal"), n), [])
+        wiped = helpers.schema_for("modal")
+        for lang in ("nodejs", "csharp"):
+            del wiped["language"][lang]["respectSchemaVersion"]
+        w = verify.metadata_warnings(wiped, n)
+        self.assertEqual(len(w), 2)
+        self.assertTrue(all("respectSchemaVersion" in x for x in w))
 
 
 class GateCmdTest(helpers.TempDirMixin, unittest.TestCase):
@@ -306,6 +312,15 @@ class ReportAndPushableTest(helpers.TempDirMixin, unittest.TestCase):
             json.dump(r, f)
         return r
 
+    def write_secrets(self, **over):
+        r = {"mode": "secret-scan", "head_sha": self.state["head"], "tree_sha": self.state["tree"], "porcelain": [],
+             "history_findings": [], "tree_findings": [], "overall": "PASS"}
+        r.update(over)
+        os.makedirs(self.rd, exist_ok=True)
+        with open(secret_scan.report_path(self.repo, self.state["head"], self.rd), "w") as f:
+            json.dump(r, f)
+        return r
+
     def test_no_report(self):
         ok, msg = verify.assert_pushable(self.repo, self.rd)
         self.assertFalse(ok)
@@ -313,11 +328,49 @@ class ReportAndPushableTest(helpers.TempDirMixin, unittest.TestCase):
 
     def test_passing_report(self):
         self.write_report()
+        self.write_secrets()
         ok, msg = verify.assert_pushable(self.repo, self.rd)
         self.assertTrue(ok, msg)
+        self.assertIn("secrets.json", msg)
+
+    def test_gate_pass_without_secret_scan_is_not_pushable(self):
+        self.write_report()
+        ok, msg = verify.assert_pushable(self.repo, self.rd)
+        self.assertFalse(ok)
+        self.assertIn("no secret-scan report for HEAD", msg)
+        self.assertIn("secret_scan.py", msg)
+
+    def test_secret_scan_findings_block_the_push(self):
+        self.write_report()
+        for over in ({"overall": "FAIL", "history_findings": [{"rule": "r"}]}, {"tree_findings": [{"rule": "r"}]},
+                     {"overall": "FAIL"}, {"history_findings": [{"rule": "r"}]}):
+            self.write_secrets(**over)
+            ok, msg = verify.assert_pushable(self.repo, self.rd)
+            self.assertFalse(ok, over)
+            self.assertIn("NOT PUSHABLE", msg)
+
+    def test_secret_scan_report_must_match_head_and_be_clean_worktree(self):
+        self.write_report()
+        self.write_secrets(tree_sha="0" * 40)
+        self.assertIn("does not match", verify.assert_pushable(self.repo, self.rd)[1])
+        self.write_secrets(mode="repo")
+        self.assertIn("does not match", verify.assert_pushable(self.repo, self.rd)[1])
+        self.write_secrets(porcelain=[" M x"])
+        self.assertIn("dirty worktree", verify.assert_pushable(self.repo, self.rd)[1])
+        with open(secret_scan.report_path(self.repo, self.state["head"], self.rd), "w") as f:
+            f.write("{nope")
+        self.assertIn("not valid JSON", verify.assert_pushable(self.repo, self.rd)[1])
+
+    def test_secret_scan_of_an_older_commit_does_not_count(self):
+        self.write_report()
+        self.write_secrets()
+        helpers.write(self.repo, "more.txt", "x")
+        helpers.commit_all(self.repo, "next")
+        self.assertIn("no report for HEAD", verify.assert_pushable(self.repo, self.rd)[1])
 
     def test_dirty_worktree(self):
         self.write_report()
+        self.write_secrets()
         helpers.write(self.repo, "stray.txt", "x")
         ok, msg = verify.assert_pushable(self.repo, self.rd)
         self.assertFalse(ok)
@@ -353,6 +406,8 @@ class ReportAndPushableTest(helpers.TempDirMixin, unittest.TestCase):
         args = ["--assert-pushable", "--repo", self.repo, "--report-dir", self.rd]
         self.assertEqual(helpers.quiet(verify.main, args), 1)
         self.write_report()
+        self.assertEqual(helpers.quiet(verify.main, args), 1)  # gate passed, secret scan missing
+        self.write_secrets()
         self.assertEqual(helpers.quiet(verify.main, args), 0)
 
     def test_report_files_and_markdown(self):

@@ -1,8 +1,5 @@
 # The verify gate
 
-(`make sdks` gets `VERSION=` from `sdk/nodejs/package.json` only when it is a real version;
-the `${VERSION}` placeholder gen-sdk leaves there is ignored, so the Makefile default applies.)
-
 `scripts/verify.py` proves, by code, that a provider may be pushed to
 `pulumi-labs/pulumi-<provider>`:
 
@@ -43,14 +40,15 @@ network `git`. Dependencies still download from Go, npm, PyPI, NuGet and Maven.
 | `toolchain` | go, pulumi, make, jq, node, npm, python3 (a real `venv` with pip), dotnet, java, gradle | the `build_*` Make targets skip silently when a tool is missing; the gate must not |
 | `make_provider`, `make_lint`, `make_test`, `make_check_copyright` | the archetype targets | same checks CI runs. `make test` uses `-race`, which needs a C compiler; without one the gate runs `go test` without `-race`, records a warning |
 | `make_schema`, `schema_diff` | regenerate, then `git diff --exit-code` on schema.json | a stale committed schema means stale SDKs |
-| `make_sdks` | all five generators, `sdk_fixups`, `go mod tidy`. FAIL on non-zero exit or any error-pattern line (`error:`, `panic:`, `failed to`, `go: ... cannot find / missing go.sum / reading ...`, tracebacks). Warnings are collected into the report. Warns if the regenerated `sdk/` differs from the committed one | requirement 1 and 2 |
+| `make_sdks` | `make sdks VERSION=0.0.1-dev` (always the dev version, as committed): all five generators, `sdk_fixups`, `go mod tidy`. FAIL on non-zero exit or any error-pattern line (`error:`, `panic:`, `failed to`, `go: ... cannot find / missing go.sum / reading ...`, tracebacks). Warnings are collected into the report. Warns if the regenerated `sdk/` differs from the committed one | requirement 1 and 2 |
+| `sdk_version` | after `make_sdks`: `sdk/nodejs/package.json` is `0.0.1-dev` (not `${VERSION}`) and `sdk/dotnet/version.txt` exists and equals it | `gen-sdk --version` is ignored when the schema's language settings lack `respectSchemaVersion` (a custom `WithLanguageMap` drops the framework defaults); the .NET build then fails with a missing `version.txt`. The step names the cause instead of leaving it to `build_dotnet_sdk` |
 | `go_sdk_build`, `go_sdk_vet` | `go build ./...` and `go vet ./...` in `sdk/go/<gopkg>` | requirement 2 |
 | `go_module_paths` | `go list -m` equals `github.com/pulumi-labs/pulumi-<p>`; every `go list ./...` package starts with it | the Go path is permanent once released |
 | `go_consumer_smoke` | fresh module outside the repo: `go mod init example.com/consumer`, require plus `replace` to the local SDK, import `github.com/pulumi-labs/pulumi-<p>/sdk/go/<gopkg>`, reference one exported symbol, `go build` | proves the exact import path users write compiles |
 | `go_examples` | every Go example and template (`examples/*`, `templates/*` with a `go.mod` or `.go` files), copied to scratch, `replace` to the local SDK, `go mod tidy`, `go build`. `${PROJECT}` placeholders are replaced in the copy | examples must compile against the SDK about to be published, not a released one |
 | `build_nodejs_sdk`, `build_python_sdk`, `build_dotnet_sdk`, `build_java_sdk` | the Make targets; FAIL on non-zero exit or any "skipping" in the output | requirement 1 |
 | `dp_*` | the five default-provider checks below | requirement 3 |
-| `check_py` | `check.py` (structure, naming, byte-identical renders, namespace grep, positive Go module paths) | one command is the whole gate |
+| `check_py` | `check.py` (structure, naming, `respectSchemaVersion` per language, committed SDKs stamped `0.0.1-dev`, byte-identical renders, namespace grep, positive Go module paths) | one command is the whole gate |
 | `worktree_clean_after` | HEAD unchanged, porcelain empty | the gate must not dirty the checkout |
 
 Toolchain notes: the .NET 8 SDK builds the generated `net6.0` csproj through
@@ -83,13 +81,59 @@ with a read of a provider credential key, stop and ask a human.
 - A committed `replace` is allowed only as that module to the local
   `sdk/go/<gopkg>`; anything else fails.
 
+## Secret scan (`secret_scan.py`)
+
+```
+python3 scripts/secret_scan.py --repo <repo>
+```
+
+gitleaks with the default rules over (1) every commit reachable in the repo
+(`gitleaks git`: history keeps a secret after the file is fixed) and (2) the
+tracked tree of HEAD (`gitleaks dir` on a `git archive`, so build output is not
+scanned). Findings are redacted. The report is
+`$HOME/.local/pulumi-labs-export/reports/<repo>-<HEAD sha>-secrets.{json,md}`,
+next to the verify reports, holding HEAD, tree, gitleaks version, commits
+scanned, the allowlist in effect (content and sha256) and each finding's rule,
+file, line and commit, never the secret. Exit 0 clean, 1 findings (or a refused
+config), 2 the scan could not run (gitleaks missing or crashed: the history was
+NOT scanned). Run it on the exact commit to push, after `verify.py`.
+
+### The allowlist: `.gitleaks.toml`
+
+An optional `.gitleaks.toml` at the mirror root is passed as `--config`. It
+must start with `[extend]` / `useDefault = true` (the script refuses a config
+that would replace the default rules) and then carry a narrow `[allowlist]`:
+
+```toml
+[extend]
+useDefault = true
+
+[allowlist]
+# <why this literal is not a secret>
+regexes = ['''sk_test_placeholder''']
+```
+
+The file is monorepo-owned: `export.py` copies `lib/providers/<p>/.gitleaks.toml`
+to the mirror root and drift detection flags any edit in the mirror. Rules:
+
+- Allowlist entries are added **only through a reviewed PR to the monorepo**,
+  never by the agent in a mirror, and never to get a failing push through.
+- Every entry names the exact literal (a regex for that literal, not a rule id,
+  a path glob or a prefix) and a comment says why it is not a secret (for
+  example a documentation placeholder in examples that history keeps). Prefer
+  removing the literal from the tree; the allowlist exists for what history
+  keeps.
+- If a finding could be a real credential, stop and report it; do not
+  allowlist it. A real secret needs rotation, not an allowlist.
+
 ## `--assert-pushable`
 
 Exits 0 only if the report for the current HEAD exists, `mode` is `repo`, its
 HEAD and tree match now, its recorded porcelain was empty, every required step
-is present and PASS, and the worktree is clean right now. Any new commit
-invalidates the report. Run it immediately before every push, including later
-PR branches.
+is present and PASS, the worktree is clean right now, **and** a secret-scan
+report for the same HEAD and tree exists, ran on a clean worktree and has no
+history or tree findings. Any new commit invalidates both reports. Run it
+immediately before every push, including later PR branches.
 
 ## Monorepo readiness (`--monorepo`)
 
@@ -103,5 +147,6 @@ examples/templates against that SDK; `sdk_fixups` and the four SDK builds using
 the rendered archetype Makefile; the same `dp_*` checks on the monorepo code,
 examples and templates. A WARN-only step `metadata_pulumi_labs` reports whether
 the builder already sets the pulumi-labs Go import path, repository, publisher
-and plugin download URL; today the monorepo metadata contract keeps the
+and plugin download URL, and whether the schema's language settings still carry
+`respectSchemaVersion` for go, nodejs, python and csharp (a custom `WithLanguageMap` drops it); today the monorepo metadata contract keeps the
 `pulumi/` values, so expect warnings that the carve's namespace commit resolves.

@@ -42,6 +42,11 @@ REQUIRED_FILES = [
 REQUIRED_DIRS = ["examples", "sdk/dotnet", "sdk/go", "sdk/java", "sdk/nodejs", "sdk/python"]
 MAX_SCAN_BYTES = 8 * 1024 * 1024
 MAX_HITS = 100
+# Version the committed SDKs carry. `make sdks` defaults to it, export.py --generate passes it, and the release
+# workflow regenerates the SDKs with the real tag, so a committed SDK never claims a version that was not released.
+SDK_DEV_VERSION = "0.0.1-dev"
+# Languages whose generator only honours `gen-sdk --version` (package.json, version.txt, csproj) with respectSchemaVersion.
+VERSIONED_LANGUAGES = ("go", "nodejs", "python", "csharp")
 
 
 def namespace_patterns(slug):
@@ -64,6 +69,36 @@ def namespace_patterns(slug):
         ("old Java package com.pulumi.%s" % slug,
          re.compile(r"com\.pulumi\.(?:" + java + r")(?![A-Za-z0-9_])")),
     ]
+
+
+def sdk_version_failures(repo, want=SDK_DEV_VERSION):
+    """Return failures for generated SDK manifests that are not stamped with want (nodejs package.json, dotnet version.txt)."""
+    fails = []
+    pkg = os.path.join(repo, "sdk", "nodejs", "package.json")
+    if os.path.isfile(pkg):
+        try:
+            got = _read_json(pkg).get("version")
+        except (ValueError, AttributeError):
+            got = None
+        if got != want:
+            if got == "${VERSION}":
+                hint = ("`gen-sdk --version` was ignored: the schema's language settings lack respectSchemaVersion (WithLanguageMap replaces "
+                        "the framework defaults); fix the monorepo builder, then regenerate.")
+            else:
+                hint = "regenerate with `make sdks VERSION=%s` (export.py --generate does)." % want
+            fails.append("WRONG sdk/nodejs/package.json version: got %r, want %r: %s" % (got, want, hint))
+    dotnet = os.path.join(repo, "sdk", "dotnet")
+    if os.path.isdir(dotnet) and any(f.endswith(".csproj") for f in os.listdir(dotnet)):
+        vt = os.path.join(dotnet, "version.txt")
+        if not os.path.isfile(vt):
+            fails.append("MISSING sdk/dotnet/version.txt: the generated csproj embeds it, so `dotnet build` fails. gen-sdk writes it only with "
+                         "`--version` plus respectSchemaVersion in the schema's csharp language settings; fix the monorepo builder, then regenerate.")
+        else:
+            with open(vt, encoding="utf-8", errors="replace") as f:
+                got = f.read().strip()
+            if got != want:
+                fails.append("WRONG sdk/dotnet/version.txt: got %r, want %r (regenerate with `make sdks VERSION=%s`)" % (got, want, want))
+    return fails
 
 
 def _git(repo, *args):
@@ -212,6 +247,11 @@ def check_repo(repo, against_source=None):
             got = _dig(schema, *path)
             if got != val:
                 fails.append("WRONG schema %s in %s: got %r, want %r" % (".".join(path), n["schema_path"], got, val))
+        for lang in VERSIONED_LANGUAGES:
+            if _dig(schema, "language", lang, "respectSchemaVersion") is not True:
+                fails.append("MISSING schema language.%s.respectSchemaVersion=true in %s: without it `gen-sdk --version` is ignored (SDKs keep "
+                             "${VERSION}, no sdk/dotnet/version.txt, the .NET build fails). The builder's WithLanguageMap replaces the framework "
+                             "defaults, so it must carry them (references/export.md, step b)." % (lang, n["schema_path"]))
         for path in (("description",), ("language", "nodejs", "packageDescription")):
             got = _dig(schema, *path)
             if not isinstance(got, str) or "experimental" not in got.lower():
@@ -222,6 +262,9 @@ def check_repo(repo, against_source=None):
         fails.append("MISSING generated SDK file %s (regenerate with `make dotnet_sdk`; schema csharp.rootNamespace must be Pulumi.Labs)" % n["dotnet_csproj"])
     if not os.path.isdir(os.path.join(repo, n["go_sdk_dir"])):
         fails.append("MISSING generated SDK dir %s/ (regenerate with `make go_sdk`; schema go.importBasePath must end in /sdk/go/%s)" % (n["go_sdk_dir"], n["go_pkg"]))
+
+    # 6a. The committed SDKs are stamped with the dev version.
+    fails.extend(sdk_version_failures(repo))
 
     # 6b. Positive Go module paths: the SDK module and every example/template go.mod.
     sdk_gomod = os.path.join(repo, n["go_sdk_dir"], "go.mod")

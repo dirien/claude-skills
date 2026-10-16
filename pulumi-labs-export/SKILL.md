@@ -1,6 +1,6 @@
 ---
 name: pulumi-labs-export
-description: Mirror a provider from the private pulumi/autoregistry monorepo (lib/providers/<provider>/, stays the source of truth) into a generated public pulumi-labs/pulumi-<provider> repo, and re-sync it on every new version. Use when asked to export, carve out, publish, release or onboard an autoregistry provider to pulumi-labs, to run the pre-push/pre-release gate on such a repo, or to file the npm/PyPI/NuGet/Maven/ESC onboarding issues for one. Covers fixed package naming, the access check, the deterministic export.py and drift check, the sync flow, vendored archetype scaffolding rendered by script (never hand-copied), the verification gate (builds all five SDKs, default-provider and credential checks, nothing is pushed without a passing report), secret scan, and the experimental 0.x.y rules.
+description: Mirror a provider from the private pulumi/autoregistry monorepo (lib/providers/<provider>/, stays the source of truth) into a generated public pulumi-labs/pulumi-<provider> repo, and re-sync it on every new version. Use when asked to export, carve out, publish, release or onboard an autoregistry provider to pulumi-labs, to run the pre-push/pre-release gate on such a repo, or to file the npm/PyPI/NuGet/Maven/ESC onboarding issues for one. Covers fixed package naming, the access check, the deterministic export.py and drift check, the sync flow, vendored archetype scaffolding rendered by script (never hand-copied), the verification gate (builds all five SDKs, default-provider and credential checks, nothing is pushed without a passing report), secret scan (`secret_scan.py`, full history plus tree), the identity-switch helper (`identity.py`), and the experimental 0.x.y rules.
 ---
 
 # Autoregistry Publisher: pulumi-labs export
@@ -28,7 +28,7 @@ You mirror providers from the private `pulumi/autoregistry` repo into
 public `pulumi-labs/pulumi-<provider>` repos and keep them in sync
 without breaking customers.
 
-All scripts are Python 3 standard library plus `gh` and `git` (`archetype_drift.py` and `export.py` never call `gh` or the network; `export.py --generate` runs `make`, which downloads Go modules). Run them as
+All scripts are Python 3 standard library plus `gh` and `git` (`archetype_drift.py`, `export.py` and `identity.py` never call `gh` or the network; `export.py --generate` runs `make`, which downloads Go modules). Run them as
 `python3 scripts/<x>.py` from this skill's folder; every one has `--help`
 and exits non-zero with an exact message. Details live in `references/`.
 
@@ -164,19 +164,32 @@ Stop if it fails; fix it in the monorepo.
 Reviewer clearance on the head SHA and green checks, before any export. It
 carries: the `carved-providers.json` entry (`listed: false`, nullable sync
 fields `null`); the builder metadata (`WithPublisher("Pulumi Labs")`,
-`WithRepository`, `WithGoImportPath`, `WithPluginDownloadURL`,
-`WithLanguageMap` with the nodejs/python/csharp/java names, and
-"experimental" in `WithDescription` and the nodejs `packageDescription`);
-the same identity in the README, examples, templates and tests (Go
-imports and `go.mod` requires, and the npm, Python, .NET and Java names);
-copyright headers; and the two `docs/` Registry pages. `export.py` refuses
-until all of it is in. Names come from `names.py`, never typed by hand.
+`WithRepository`, `WithLanguageMap`, then `WithGoImportPath`,
+`WithPluginDownloadURL`, and "experimental" in `WithDescription` and the
+nodejs `packageDescription`); the same identity in the README, examples,
+templates and tests (Go imports and `go.mod` requires, and the npm, Python,
+.NET and Java names); copyright headers; and the two `docs/` Registry pages.
+`export.py` refuses until all of it is in. Names come from `names.py`, never
+typed by hand. Do it in this order:
+
+1. `python3 scripts/identity.py --check --monorepo <checkout> --provider <p>`
+   lists every remaining old-identity hit as `file:line [category]`.
+2. `python3 scripts/identity.py --apply ...` performs only the mechanical,
+   string-for-string rewrites (package names and import paths in examples,
+   templates, README and tests). It is idempotent and prints what is left.
+3. The manual items, by hand: the builder chain (`WithLanguageMap` BEFORE
+   `WithGoImportPath`, and it must carry the framework defaults including
+   `respectSchemaVersion: true`, or the SDKs are not version-stamped and the
+   .NET build fails; the exact map is in `references/export.md`), the
+   copyright headers, the two docs pages, and the `carved-providers.json`
+   entry.
+4. `identity.py --check` until it prints no hits.
 
 **c. Initial export.** Full non-shallow unfiltered clone of the monorepo,
 `git subtree split --prefix=lib/providers/<p>` to keep history, pull it into
 the empty mirror clone, run `export.py --out . --generate`, commit as
-`Export pulumi/autoregistry@<sha>`. Then gitleaks over the full history,
-`verify.py`, `verify.py --assert-pushable`, push `main` (the one allowed
+`Export pulumi/autoregistry@<sha>`. Then `scripts/secret_scan.py` (gitleaks over the full history and the
+tree), `verify.py`, `verify.py --assert-pushable`, push `main` (the one allowed
 direct push), wait for the `test` workflow to go green, and open a monorepo
 PR setting `exportedAt`, `lastSyncedCommit`, `lastSyncedVersion`.
 
@@ -196,11 +209,20 @@ Engin "ready to tag v<version>". Never tag.
 Nothing goes to the external repo unless `verify.py` passed on the exact commit:
 
 ```
+python3 scripts/secret_scan.py --repo <repo>               # gitleaks: full history + tree, writes <repo>-<sha>-secrets.json
 python3 scripts/verify.py --repo <repo>                    # whole gate, writes the report, exit 0 only if all pass
-python3 scripts/verify.py --assert-pushable --repo <repo>  # run immediately before git push
+python3 scripts/verify.py --assert-pushable --repo <repo>  # run immediately before git push; needs BOTH reports for HEAD
 ```
 
-Any new commit (even a one-line fix) needs a fresh `verify.py` run. The gate
+`secret_scan.py` runs gitleaks with the default rules over every commit and
+the tracked tree of HEAD. A finding stops the push. A `.gitleaks.toml` at the
+repo root (copied there by `export.py` from `lib/providers/<p>/.gitleaks.toml`,
+`[extend] useDefault = true` plus a narrow `[allowlist]`) is the only way to
+accept one; entries are added only through a reviewed monorepo PR (see
+`references/verify.md`). If gitleaks is missing the script exits 2: say
+"history was not scanned for secrets" and stop.
+
+Any new commit (even a one-line fix) needs a fresh `secret_scan.py` and `verify.py` run. The gate
 proves: SDK generation works for all five languages with no codegen or
 `go mod tidy` errors; the Go SDK, every Go example and template compile against
 the local SDK; the Go module paths are the pulumi-labs ones; every SDK builds
@@ -214,7 +236,9 @@ documents every check and why.
 It reports all failures and exits 1 on any: required files present; archetype
 files byte-identical to what render.py produces (no hand edits); no
 `provider/go.mod`, `version.txt` or nested `go.mod`; root module name; schema
-metadata and SDK names match the naming table; no `pulumi/autoregistry`,
+metadata and SDK names match the naming table; every language in the schema
+has `respectSchemaVersion` and the committed SDKs carry `0.0.1-dev`
+(`sdk/dotnet/version.txt` exists); no `pulumi/autoregistry`,
 `github.com/pulumi/pulumi-<p>`, `@pulumi/<p>`, `pulumi_<p>`, `Pulumi.<Pascal>`
 or `com.pulumi.<p>` in any tracked file; experimental marking; every `v*` tag
 is `v0.x.y`; copyright headers. Fix the cause, never the check. If a check

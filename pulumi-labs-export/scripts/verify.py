@@ -35,12 +35,14 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bootstrap  # noqa: E402
+import check  # noqa: E402
 import gomod  # noqa: E402
 import names  # noqa: E402
 import render  # noqa: E402
+import secret_scan  # noqa: E402
 
 SKILL_DIR = os.path.dirname(HERE)
-GATE_VERSION = 1
+GATE_VERSION = 2
 TAIL_LINES = 25
 TAIL_CHARS = 4000
 CMD_TIMEOUT = 3600
@@ -49,7 +51,7 @@ CMD_TIMEOUT = 3600
 # report cannot satisfy --assert-pushable). Per-example detail lives in items.
 REQUIRED_STEPS = [
     "identity", "toolchain", "make_provider", "make_lint", "make_test", "make_check_copyright",
-    "make_schema", "schema_diff", "make_sdks", "go_sdk_build", "go_sdk_vet", "go_module_paths",
+    "make_schema", "schema_diff", "make_sdks", "sdk_version", "go_sdk_build", "go_sdk_vet", "go_module_paths",
     "go_consumer_smoke", "go_examples", "build_nodejs_sdk", "build_python_sdk", "build_dotnet_sdk",
     "build_java_sdk", "dp_env_defaults", "dp_no_required_config", "dp_no_env_tags",
     "dp_no_explicit_provider", "dp_no_credential_require", "check_py", "worktree_clean_after",
@@ -443,15 +445,6 @@ def consumer_main_go(import_path, symbol):
     return 'package main\n\nimport sdk "%s"\n\n%s\n\nfunc main() {}\n' % (import_path, ref)
 
 
-SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$")
-
-
-def real_sdk_version(v):
-    """True if v is a concrete version. gen-sdk leaves the placeholder ${VERSION} in sdk/nodejs/package.json until
-    `make set_version` runs; passing that to make as VERSION=${VERSION} is a recursive variable error."""
-    return isinstance(v, str) and SEMVER_RE.match(v) is not None
-
-
 def go_sdk_dir_for(root, schema):
     """Locate the generated Go SDK dir (relative to root) from the schema's importBasePath."""
     base = (((schema or {}).get("language") or {}).get("go") or {}).get("importBasePath") or ""
@@ -725,14 +718,13 @@ def run_repo(repo, prefix, report_dir, keep=False):
                  "" if rc == 0 and rc2 == 0 else ("schema.json is not tracked" if rc2 != 0 else "schema.json is out of date: run `make schema` and commit"),
                  lp, time.time() - t0, tail=tail_of(text))
 
-        sdkv = None
-        try:
-            with open(os.path.join(clone, "sdk/nodejs/package.json")) as f:
-                sdkv = json.load(f).get("version")
-        except (OSError, ValueError):
-            pass
-        argv = ["make", "sdks"] + (["VERSION=" + sdkv] if real_sdk_version(sdkv) else [])
+        # Always the dev version: it is what export.py --generate committed, and the release workflow re-stamps it.
+        argv = ["make", "sdks", "VERSION=" + check.SDK_DEV_VERSION]
         gate.cmd("make_sdks", " ".join(argv), argv, clone, error_res=CODEGEN_ERROR_RES, collect_warnings=True)
+        t0 = time.time()
+        stamp = check.sdk_version_failures(clone)
+        gate.add("sdk_version", "regenerated SDKs carry %s (nodejs package.json, dotnet version.txt)" % check.SDK_DEV_VERSION,
+                 "FAIL" if stamp else "PASS", "\n".join(stamp), seconds=time.time() - t0)
         _, por = git(clone, "status", "--porcelain", "--", "sdk")
         if por.strip():
             gate.steps[-1]["warnings"].append("regenerated sdk/ differs from the committed sdk/ (%d paths); "
@@ -810,7 +802,33 @@ def assert_pushable(repo, report_dir):
     failed = [i for i, s in steps.items() if s.get("status") != "PASS"]
     if failed or r.get("overall") != "PASS":
         return False, "NOT PUSHABLE: failing step(s): %s" % (", ".join(failed) or "overall != PASS")
-    return True, "PUSHABLE: gate passed for HEAD %s (tree %s), worktree clean. Report: %s" % (state["head"], state["tree"], path)
+    ok, msg = secret_scan_clean(repo, state, report_dir)
+    if not ok:
+        return False, msg
+    return True, ("PUSHABLE: gate and secret scan passed for HEAD %s (tree %s), worktree clean. Reports: %s, %s"
+                  % (state["head"], state["tree"], path, secret_scan.report_path(repo, state["head"], report_dir)))
+
+
+def secret_scan_clean(repo, state, report_dir):
+    """Return (ok, message): a clean secret_scan.py report must exist for the current HEAD (history and tree, default rules)."""
+    path = secret_scan.report_path(repo, state["head"], report_dir)
+    hint = "run `python3 scripts/secret_scan.py --repo %s`" % repo
+    try:
+        with open(path, encoding="utf-8") as f:
+            r = json.load(f)
+    except OSError:
+        return False, "NOT PUSHABLE: no secret-scan report for HEAD %s (expected %s); %s" % (state["head"], path, hint)
+    except ValueError as e:
+        return False, "NOT PUSHABLE: secret-scan report %s is not valid JSON: %s" % (path, e)
+    if r.get("mode") != "secret-scan" or r.get("head_sha") != state["head"] or r.get("tree_sha") != state["tree"]:
+        return False, "NOT PUSHABLE: secret-scan report %s does not match HEAD/tree; %s" % (path, hint)
+    if r.get("porcelain"):
+        return False, "NOT PUSHABLE: the secret scan ran on a dirty worktree; commit, then %s" % hint
+    found = len(r.get("history_findings") or []) + len(r.get("tree_findings") or [])
+    if found or r.get("overall") != "PASS":
+        return False, ("NOT PUSHABLE: the secret scan has %d finding(s) (see %s). Fix the cause in the monorepo; an allowlist entry "
+                       "needs a reviewed monorepo PR (references/verify.md)" % (found, path))
+    return True, "secret scan clean"
 
 
 # --------------------------------------------------------------- monorepo mode
@@ -831,6 +849,10 @@ def metadata_warnings(schema, n):
         if got[label] != n[key]:
             out.append("provider metadata %s is %r, the carve must set %r (the monorepo contract keeps the pulumi/ values until the namespace commit)"
                        % (label, got[label], n[key]))
+    for lang in check.VERSIONED_LANGUAGES:
+        if (((schema.get("language") or {}).get(lang) or {}).get("respectSchemaVersion")) is not True:
+            out.append("schema language.%s.respectSchemaVersion is not true: `gen-sdk --version` would be ignored and the .NET SDK would not build. "
+                       "A custom WithLanguageMap replaces the framework defaults and must carry them (references/export.md, step b)" % lang)
     return out
 
 
