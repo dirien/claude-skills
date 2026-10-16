@@ -145,6 +145,21 @@ def build_env(prefix):
     return env
 
 
+def prepare_sandbox_for(lang, prefix, env):
+    """Refresh the sandbox fixes a language build needs; return env updates (best effort, never raises).
+
+    dotnet: the NuGet migrations marker. java: gradle.properties from the current proxy env.
+    """
+    try:
+        if lang == "dotnet":
+            return bootstrap.ensure_nuget_marker(prefix, env)
+        if lang == "java":
+            bootstrap.write_gradle_properties(prefix, env)
+    except (OSError, bootstrap.BootstrapError) as e:
+        sys.stderr.write("sandbox fix for %s skipped: %s\n" % (lang, getattr(e, "strerror", None) or e))
+    return {}
+
+
 def has_c_compiler(env):
     """True if a C compiler is on PATH (needed by `go test -race`)."""
     path = env.get("PATH", "")
@@ -152,6 +167,26 @@ def has_c_compiler(env):
 
 
 # ------------------------------------------------------------ the gate state
+
+NUGET_MUTEX_RE = re.compile(r"NuGet-Migrations|Mutex\.CreateMutexCore")
+GRADLE_TIMEOUT_RE = re.compile(r"(Connect|Read) timed out|Could not (GET|HEAD|resolve)[^\n]*(timed out|Connect)|"
+                               r"java\.net\.(SocketTimeout|ConnectException)|Connection timed out", re.I)
+NUGET_HINT = ("hint: dotnet failed on the NuGet-Migrations named mutex; run `python3 scripts/bootstrap.py` "
+              "(creates ${XDG_DATA_HOME:-$HOME/.local/share}/NuGet/Migrations/1, or sets XDG_DATA_HOME=<prefix>/xdg-data) "
+              "and eval its exports")
+GRADLE_HINT = ("hint: Gradle timed out connecting; its JVM ignores HTTP(S)_PROXY. Run `python3 scripts/bootstrap.py` "
+               "to write $GRADLE_USER_HOME/gradle.properties from the proxy env")
+
+
+def failure_hints(text):
+    """Return hint lines for known sandbox failure signatures in command output."""
+    hints = []
+    if NUGET_MUTEX_RE.search(text or ""):
+        hints.append(NUGET_HINT)
+    if GRADLE_TIMEOUT_RE.search(text or ""):
+        hints.append(GRADLE_HINT)
+    return hints
+
 
 class Gate:
     """Collects step results and runs logged commands."""
@@ -209,6 +244,8 @@ class Gate:
                 reasons.append("... %d more error lines (see log)" % (len(hits) - 5))
         warns = [l.strip()[:200] for l in lines if WARNING_RE.search(l) and not NOTICE_RE.search(l)] if collect_warnings else []
         status = "FAIL" if reasons else "PASS"
+        if reasons:
+            reasons += failure_hints(text)
         self.add(sid, title, status, "\n".join(reasons) if reasons else pass_detail, lp, time.time() - t0,
                  warns, tail=tail_of(text))
         return status, text
@@ -736,6 +773,7 @@ def run_repo(repo, prefix, report_dir, keep=False):
         consumer_smoke(gate, "go_consumer_smoke", sdk_dir, n["go_import_base_path"], work)
         go_examples(gate, clone, sdk_dir, n["go_import_base_path"], work)
         for lang in ("nodejs", "python", "dotnet", "java"):
+            gate.env.update(prepare_sandbox_for(lang, prefix, gate.env))
             gate.cmd("build_%s_sdk" % lang, "make build_%s_sdk" % lang, ["make", "build_%s_sdk" % lang], clone,
                      fail_on_skip=True, collect_warnings=True)
         schema = None
@@ -923,6 +961,7 @@ def run_monorepo(mono, provider, prefix, report_dir, keep=False):
             go_examples(gate, pdir, sdk_dir, sdk_module, work)
             gate.cmd("sdk_fixups", "make sdk_fixups (archetype fixups)", ["make", "sdk_fixups"], gen)
             for lang in ("nodejs", "python", "dotnet", "java"):
+                gate.env.update(prepare_sandbox_for(lang, prefix, gate.env))
                 gate.cmd("build_%s_sdk" % lang, "build %s SDK (make build_%s_sdk)" % (lang, lang),
                          ["make", "build_%s_sdk" % lang], gen, fail_on_skip=True, collect_warnings=True)
             meta = metadata_warnings(schema, n)

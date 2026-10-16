@@ -56,3 +56,35 @@ background fetch. Use `--depth 1 --no-checkout` followed by
 The export's `git subtree split` needs the opposite: a full, non-shallow,
 unfiltered clone of `pulumi/autoregistry` (about 12 MB), made with a plain
 `git clone https://github.com/pulumi/autoregistry <dir>`.
+
+## No named mutexes: the dotnet CLI crashes on first use
+
+The sandbox cannot create named mutexes. The first `dotnet` call dies with
+`System.IO.IOException ... 'NuGet-Migrations'` at `Mutex.CreateMutexCore`.
+NuGet's MigrationRunner skips the mutex when its marker file exists, so
+`bootstrap.py` creates an empty
+`${XDG_DATA_HOME:-$HOME/.local/share}/NuGet/Migrations/1` on every run. If that
+directory is not writable it uses `XDG_DATA_HOME=<prefix>/xdg-data` and prints
+`export XDG_DATA_HOME=...` (eval it). It also exports
+`NUGET_PACKAGES=<prefix>/nuget-packages`. `verify.py` re-checks the marker before
+the .NET build and, on this stack trace, adds a hint line to the step.
+
+## The Gradle JVM ignores the proxy environment variables
+
+Behind the runtime's HTTP(S) proxy (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, either
+case) Gradle resolves nothing: dependency and plugin downloads time out after about
+12 minutes. Only JVM system properties help. On every run `bootstrap.py`
+regenerates `$GRADLE_USER_HOME/gradle.properties` (mode 0600) from the current
+session's proxy env:
+
+- `systemProp.https.proxyHost`/`proxyPort` and `systemProp.http.proxyHost`/`proxyPort`
+  (missing port: 443 for an `https://` proxy URL, else 80)
+- `systemProp.http.nonProxyHosts` and `systemProp.https.nonProxyHosts` from
+  `NO_PROXY`, commas replaced by `|`
+- `proxyUser`/`proxyPassword` only when the proxy URL carries userinfo
+
+Only the lines between the `# BEGIN/END pulumi-labs-export proxy` markers are managed;
+other lines are preserved. With no proxy env set the block is removed (and the file
+if nothing else is in it). Credentials are never printed: log lines mask userinfo
+as `***`. No truststore change was needed. `verify.py` refreshes the file before the
+Java build and hints at it when Gradle reports connect timeouts.

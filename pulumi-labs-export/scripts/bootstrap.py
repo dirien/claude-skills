@@ -516,13 +516,14 @@ def gradle_user_home(prefix):
 def toolchain_env(prefix, specs, icu=None):
     """Return the ordered {VAR: value} exports the full-profile tools need.
 
+    NUGET_PACKAGES=<prefix>/nuget-packages is always included too.
     GRADLE_USER_HOME=<prefix>/gradle-home is always included: in the agent runtime
     ~/.gradle is not usable and Gradle fails without a writable user home. The other
     variables are included only for tools unpacked under prefix: JAVA_HOME,
     DOTNET_ROOT, DOTNET_CLI_TELEMETRY_OPTOUT, DOTNET_NOLOGO and, when no libicu is
     installed, DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1.
     """
-    env = {"GRADLE_USER_HOME": gradle_user_home(prefix)}
+    env = {"GRADLE_USER_HOME": gradle_user_home(prefix), "NUGET_PACKAGES": nuget_packages(prefix)}
     if "java" in specs and os.path.isdir(install_dir(prefix, specs["java"])):
         env["JAVA_HOME"] = install_dir(prefix, specs["java"])
     if "dotnet" in specs and os.path.isdir(install_dir(prefix, specs["dotnet"])):
@@ -704,6 +705,187 @@ def install_make(prefix, arch, log):
     raise BootstrapError("could not install make; " + "; ".join(reasons))
 
 
+# ------------------------------------------------- sandbox environment fixes
+
+GRADLE_BEGIN = "# BEGIN pulumi-labs-export proxy (managed block, do not edit)"
+GRADLE_END = "# END pulumi-labs-export proxy"
+
+
+def nuget_packages(prefix):
+    """Return the NuGet package cache used for every dotnet run: <prefix>/nuget-packages."""
+    return os.path.join(prefix, "nuget-packages")
+
+
+def mask_proxy(url):
+    """Return url with any userinfo replaced by '***', safe to log."""
+    if not url:
+        return url
+    return re.sub(r"^([A-Za-z][A-Za-z0-9+.-]*://)?[^/@]*@", lambda m: (m.group(1) or "") + "***@", url, count=1)
+
+
+def parse_proxy_url(url):
+    """Parse a proxy URL into (host, port, user, password); user/password are None without userinfo.
+
+    A missing port defaults to 443 for an https:// URL and 80 otherwise (including no scheme).
+    Returns None if url is empty or has no host.
+    """
+    url = (url or "").strip()
+    if not url:
+        return None
+    if "://" not in url:
+        url = "http://" + url
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    if port is None:
+        port = 443 if parts.scheme.lower() == "https" else 80
+    user = urllib.parse.unquote(parts.username) if parts.username is not None else None
+    password = urllib.parse.unquote(parts.password) if parts.password is not None else None
+    return host, port, user, password
+
+
+def env_first(env, *names):
+    """Return the first non-empty value among env[names], or ''."""
+    for n in names:
+        v = (env.get(n) or "").strip()
+        if v:
+            return v
+    return ""
+
+
+def translate_no_proxy(value):
+    """Translate NO_PROXY (comma separated) to a Java nonProxyHosts value (| separated)."""
+    return "|".join(h.strip() for h in (value or "").split(",") if h.strip())
+
+
+def _prop(value):
+    """Escape a value for a .properties file."""
+    out = value.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r")
+    return re.sub(r"^ ", "\\ ", out)
+
+
+def gradle_proxy_lines(env):
+    """Return the managed gradle.properties proxy lines for env (empty list if no proxy is set)."""
+    lines = []
+    for scheme, names in (("https", ("HTTPS_PROXY", "https_proxy")), ("http", ("HTTP_PROXY", "http_proxy"))):
+        parsed = parse_proxy_url(env_first(env, *names))
+        if not parsed:
+            continue
+        host, port, user, password = parsed
+        lines.append("systemProp.%s.proxyHost=%s" % (scheme, _prop(host)))
+        lines.append("systemProp.%s.proxyPort=%d" % (scheme, port))
+        if user is not None:
+            lines.append("systemProp.%s.proxyUser=%s" % (scheme, _prop(user)))
+            lines.append("systemProp.%s.proxyPassword=%s" % (scheme, _prop(password or "")))
+    if lines:
+        nph = translate_no_proxy(env_first(env, "NO_PROXY", "no_proxy"))
+        if nph:
+            lines.append("systemProp.http.nonProxyHosts=%s" % _prop(nph))
+            lines.append("systemProp.https.nonProxyHosts=%s" % _prop(nph))
+    return lines
+
+
+def rewrite_managed_block(text, block_lines):
+    """Return text with the managed block replaced by block_lines (removed if empty); other lines are kept."""
+    kept, skipping = [], False
+    for line in text.splitlines():
+        if line.strip() == GRADLE_BEGIN:
+            skipping = True
+            continue
+        if skipping:
+            if line.strip() == GRADLE_END:
+                skipping = False
+            continue
+        kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    if block_lines:
+        if kept:
+            kept.append("")
+        kept += [GRADLE_BEGIN] + list(block_lines) + [GRADLE_END]
+    return "\n".join(kept) + "\n" if kept else ""
+
+
+def write_gradle_properties(prefix, env=None, err=None):
+    """Regenerate $GRADLE_USER_HOME/gradle.properties proxy keys from the proxy env (mode 0600).
+
+    Only the managed block is touched; other lines are preserved. With no proxy env the block is
+    removed (and the file deleted if nothing else is left). Credentials are never logged.
+    """
+    env = os.environ if env is None else env
+    err = err or (lambda s: None)
+    home = env.get("GRADLE_USER_HOME") or gradle_user_home(prefix)
+    path = os.path.join(home, "gradle.properties")
+    os.makedirs(home, exist_ok=True)
+    try:
+        with open(path, encoding="utf-8") as f:
+            old = f.read()
+    except FileNotFoundError:
+        old = ""
+    lines = gradle_proxy_lines(env)
+    new = rewrite_managed_block(old, lines)
+    if not new:
+        if os.path.exists(path):
+            os.remove(path)
+        err("gradle proxy: none set; managed block removed")
+        return path
+    if new != old or not os.path.exists(path):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(new)
+    os.chmod(path, 0o600)
+    if lines:
+        shown = [mask_proxy(env_first(env, *n)) for n in (("HTTPS_PROXY", "https_proxy"), ("HTTP_PROXY", "http_proxy"))]
+        err("gradle proxy: wrote %s (https=%s http=%s)" % (path, shown[0] or "-", shown[1] or "-"))
+    return path
+
+
+def ensure_nuget_marker(prefix, env=None, err=None):
+    """Create the empty NuGet migrations marker so dotnet skips its named mutex.
+
+    Uses ${XDG_DATA_HOME:-$HOME/.local/share}/NuGet/Migrations/1; if that is not writable, falls back to
+    <prefix>/xdg-data. Returns {"XDG_DATA_HOME": dir} when the fallback is needed (export it), else {}.
+    """
+    env = os.environ if env is None else env
+    err = err or (lambda s: None)
+    base = env.get("XDG_DATA_HOME") or os.path.join(env.get("HOME") or os.path.expanduser("~"), ".local", "share")
+    for data_home, extra in ((base, {}), (os.path.join(prefix, "xdg-data"), None)):
+        if extra is None:
+            extra = {"XDG_DATA_HOME": data_home}
+        d = os.path.join(data_home, "NuGet", "Migrations")
+        try:
+            os.makedirs(d, exist_ok=True)
+            marker = os.path.join(d, "1")
+            if not os.path.exists(marker):
+                open(marker, "a").close()
+            if not os.access(marker, os.R_OK):
+                raise OSError("marker not readable")
+            if extra:
+                err("nuget: %s not writable, using XDG_DATA_HOME=%s" % (base, data_home))
+            return extra
+        except OSError:
+            continue
+    raise BootstrapError("cannot create the NuGet migrations marker under %s or %s" % (base, os.path.join(prefix, "xdg-data")))
+
+
+def apply_sandbox_fixes(prefix, env=None, err=None):
+    """Apply the per-session sandbox fixes; return extra exports ({} or {"XDG_DATA_HOME": ...}).
+
+    Always runs, even when every tool is installed: the NuGet migrations marker (dotnet crashes on
+    named mutexes otherwise), the NuGet package dir and gradle.properties proxy keys (the Gradle JVM
+    ignores the proxy env vars).
+    """
+    env = os.environ if env is None else env
+    os.makedirs(nuget_packages(prefix), exist_ok=True)
+    extra = ensure_nuget_marker(prefix, env, err)
+    write_gradle_properties(prefix, env, err)
+    return extra
+
+
 # --------------------------------------------------------------------- cli
 
 def default_prefix():
@@ -779,6 +961,12 @@ def main(argv=None, out=None, err=None):
     except OSError as e:
         err("bootstrap: error: cannot create %s: %s" % (gradle_user_home(prefix), e.strerror or e.__class__.__name__))
         return 1
+    extra_env = {}
+    try:
+        extra_env = apply_sandbox_fixes(prefix, os.environ, err)
+    except (BootstrapError, OSError) as e:
+        err("bootstrap: error: sandbox fixes: %s" % (getattr(e, "strerror", None) or e))
+        return 1
     failures, report = [], []
     for name in PROFILES[args.profile]:
         if args.only and name != args.only:
@@ -810,6 +998,8 @@ def main(argv=None, out=None, err=None):
         return 1
     out(path_line(prefix))
     for var, val in toolchain_env(prefix, specs).items():
+        out(export_line(var, val))
+    for var, val in extra_env.items():
         out(export_line(var, val))
     for name, ver in report:
         out("# %s: %s" % (name, ver))

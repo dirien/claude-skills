@@ -4,6 +4,7 @@ import os
 import stat
 import tarfile
 import unittest
+from unittest import mock
 
 import helpers
 import bootstrap
@@ -173,7 +174,8 @@ class ExtraToolPinTest(helpers.TempDirMixin, unittest.TestCase):
         specs = bootstrap.tool_specs("amd64", "3.241.0")
         prefix = os.path.join(self.tmp, "p")
         # Gradle's user home is always set, even before any tool is unpacked.
-        self.assertEqual(bootstrap.toolchain_env(prefix, specs, icu=True), {"GRADLE_USER_HOME": os.path.join(prefix, "gradle-home")})
+        self.assertEqual(bootstrap.toolchain_env(prefix, specs, icu=True), {"GRADLE_USER_HOME": os.path.join(prefix, "gradle-home"),
+                                                                                "NUGET_PACKAGES": os.path.join(prefix, "nuget-packages")})
         os.makedirs(bootstrap.install_dir(prefix, specs["java"]))
         os.makedirs(bootstrap.install_dir(prefix, specs["dotnet"]))
         env = bootstrap.toolchain_env(prefix, specs, icu=False)
@@ -198,12 +200,16 @@ class ExtraToolPinTest(helpers.TempDirMixin, unittest.TestCase):
             bootstrap.install_make = lambda prefix, arch, log: "stub"
             bootstrap.detect_arch = lambda machine=None: "amd64"
             bootstrap.sys.platform = "linux"
-            rc = bootstrap.main(["--prefix", prefix], out=lines.append, err=lambda s: None)
+            with mock.patch.dict(os.environ, {"HOME": self.tmp, "GRADLE_USER_HOME": want}):
+                os.environ.pop("XDG_DATA_HOME", None)
+                rc = bootstrap.main(["--prefix", prefix], out=lines.append, err=lambda s: None)
         finally:
             bootstrap.install_spec, bootstrap.check_spec, bootstrap.install_make, bootstrap.detect_arch, bootstrap.sys.platform = orig
         self.assertEqual(rc, 0)
         self.assertIn('export GRADLE_USER_HOME="%s"' % want, lines)
         self.assertTrue(os.path.isdir(want))
+        self.assertIn('export NUGET_PACKAGES="%s"' % os.path.join(prefix, "nuget-packages"), lines)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, ".local", "share", "NuGet", "Migrations", "1")))
 
     def test_gradle_is_run_with_the_gradle_home(self):
         prefix = os.path.join(self.tmp, "p")
@@ -234,6 +240,149 @@ class ExtraToolPinTest(helpers.TempDirMixin, unittest.TestCase):
         os.chmod(os.path.join(self.tmp, "g"), 0o755)
         line, err = bootstrap.run_version([os.path.join(self.tmp, "g")], None, "9.8.1")
         self.assertEqual(line, "Gradle 9.8.1")
+
+
+class SandboxFixesTest(helpers.TempDirMixin, unittest.TestCase):
+    def test_parse_proxy_url(self):
+        p = bootstrap.parse_proxy_url
+        self.assertEqual(p("http://10.1.2.3:3128"), ("10.1.2.3", 3128, None, None))
+        self.assertEqual(p("http://proxy.example.com:8080/"), ("proxy.example.com", 8080, None, None))
+        self.assertEqual(p("http://u%40x:p%3Aw@proxy.example.com:8080"), ("proxy.example.com", 8080, "u@x", "p:w"))
+        self.assertEqual(p("http://proxy.example.com"), ("proxy.example.com", 80, None, None))
+        self.assertEqual(p("https://proxy.example.com"), ("proxy.example.com", 443, None, None))
+        self.assertEqual(p("10.0.0.1:99"), ("10.0.0.1", 99, None, None))
+        self.assertIsNone(p(""))
+        self.assertIsNone(p(None))
+
+    def test_mask_proxy(self):
+        self.assertEqual(bootstrap.mask_proxy("http://u:secret@h:1"), "http://***@h:1")
+        self.assertEqual(bootstrap.mask_proxy("u:secret@h:1"), "***@h:1")
+        self.assertEqual(bootstrap.mask_proxy("http://h:1"), "http://h:1")
+
+    def test_env_case(self):
+        up = bootstrap.gradle_proxy_lines({"HTTPS_PROXY": "http://a:1", "HTTP_PROXY": "http://b:2"})
+        lo = bootstrap.gradle_proxy_lines({"https_proxy": "http://a:1", "http_proxy": "http://b:2"})
+        self.assertEqual(up, lo)
+        self.assertIn("systemProp.https.proxyHost=a", up)
+        self.assertIn("systemProp.http.proxyPort=2", up)
+        only = bootstrap.gradle_proxy_lines({"http_proxy": "http://b:2"})
+        self.assertFalse(any(l.startswith("systemProp.https.") for l in only))
+        self.assertEqual(bootstrap.gradle_proxy_lines({}), [])
+
+    def test_no_proxy_translation(self):
+        self.assertEqual(bootstrap.translate_no_proxy("localhost, 127.0.0.1,,*.local"), "localhost|127.0.0.1|*.local")
+        self.assertEqual(bootstrap.translate_no_proxy(""), "")
+        lines = bootstrap.gradle_proxy_lines({"HTTPS_PROXY": "http://a:1", "no_proxy": "x,y"})
+        self.assertIn("systemProp.http.nonProxyHosts=x|y", lines)
+        self.assertIn("systemProp.https.nonProxyHosts=x|y", lines)
+        # no proxy, no nonProxyHosts
+        self.assertEqual(bootstrap.gradle_proxy_lines({"NO_PROXY": "x"}), [])
+
+    def test_userinfo_only_when_present(self):
+        no = "\n".join(bootstrap.gradle_proxy_lines({"HTTPS_PROXY": "http://a:1"}))
+        self.assertNotIn("proxyUser", no)
+        yes = "\n".join(bootstrap.gradle_proxy_lines({"HTTPS_PROXY": "http://me:pw@a:1"}))
+        self.assertIn("systemProp.https.proxyUser=me", yes)
+        self.assertIn("systemProp.https.proxyPassword=pw", yes)
+
+    def _props(self, env):
+        prefix = os.path.join(self.tmp, "p")
+        env = dict(env, GRADLE_USER_HOME=os.path.join(prefix, "gradle-home"))
+        logs = []
+        path = bootstrap.write_gradle_properties(prefix, env, logs.append)
+        return path, env, logs
+
+    def test_write_idempotent_preserves_foreign_lines_and_mode(self):
+        path, env, _ = self._props({"HTTPS_PROXY": "http://a:1"})
+        with open(path) as f:
+            first = f.read()
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        with open(path, "w") as f:
+            f.write("org.gradle.daemon=false\n" + first + "# tail\nfoo=bar\n")
+        os.chmod(path, 0o644)
+        bootstrap.write_gradle_properties(os.path.join(self.tmp, "p"), env, lambda s: None)
+        with open(path) as f:
+            second = f.read()
+        bootstrap.write_gradle_properties(os.path.join(self.tmp, "p"), env, lambda s: None)
+        with open(path) as f:
+            third = f.read()
+        self.assertEqual(second, third)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.assertEqual(second.count(bootstrap.GRADLE_BEGIN), 1)
+        self.assertIn("org.gradle.daemon=false", second)
+        self.assertIn("foo=bar", second)
+        # a changed proxy replaces the block, not appends
+        env2 = dict(env, HTTPS_PROXY="http://z:9")
+        bootstrap.write_gradle_properties(os.path.join(self.tmp, "p"), env2, lambda s: None)
+        with open(path) as f:
+            fourth = f.read()
+        self.assertIn("proxyHost=z", fourth)
+        self.assertNotIn("proxyHost=a", fourth)
+        self.assertEqual(fourth.count(bootstrap.GRADLE_BEGIN), 1)
+        self.assertIn("foo=bar", fourth)
+
+    def test_block_removed_without_proxy(self):
+        path, env, _ = self._props({"HTTPS_PROXY": "http://a:1"})
+        with open(path, "a") as f:
+            f.write("keep=me\n")
+        env.pop("HTTPS_PROXY")
+        bootstrap.write_gradle_properties(os.path.join(self.tmp, "p"), env, lambda s: None)
+        with open(path) as f:
+            text = f.read()
+        self.assertEqual(text, "keep=me\n")
+        # a file holding only the block disappears
+        os.remove(path)
+        path, env, _ = self._props({"HTTP_PROXY": "http://a:1"})
+        env.pop("HTTP_PROXY")
+        bootstrap.write_gradle_properties(os.path.join(self.tmp, "p"), env, lambda s: None)
+        self.assertFalse(os.path.exists(path))
+
+    def test_credentials_never_logged(self):
+        path, env, logs = self._props({"HTTPS_PROXY": "http://me:topsecret@a:1", "http_proxy": "http://me:topsecret@b:2"})
+        self.assertTrue(logs)
+        self.assertNotIn("topsecret", "\n".join(logs))
+        self.assertNotIn("topsecret", "\n".join(logs).replace("***", ""))
+
+    def test_nuget_marker_default(self):
+        home = os.path.join(self.tmp, "home")
+        os.makedirs(home)
+        env = {"HOME": home}
+        self.assertEqual(bootstrap.ensure_nuget_marker(os.path.join(self.tmp, "p"), env), {})
+        marker = os.path.join(home, ".local", "share", "NuGet", "Migrations", "1")
+        self.assertTrue(os.path.isfile(marker))
+        self.assertEqual(os.path.getsize(marker), 0)
+        self.assertEqual(bootstrap.ensure_nuget_marker(os.path.join(self.tmp, "p"), env), {})  # idempotent
+
+    def test_nuget_marker_respects_xdg_data_home(self):
+        xdg = os.path.join(self.tmp, "xdg")
+        self.assertEqual(bootstrap.ensure_nuget_marker(os.path.join(self.tmp, "p"), {"HOME": self.tmp, "XDG_DATA_HOME": xdg}), {})
+        self.assertTrue(os.path.isfile(os.path.join(xdg, "NuGet", "Migrations", "1")))
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root ignores directory permissions")
+    def test_nuget_marker_falls_back_when_not_writable(self):
+        home = os.path.join(self.tmp, "home")
+        os.makedirs(home)
+        os.chmod(home, 0o500)
+        prefix = os.path.join(self.tmp, "p")
+        try:
+            extra = bootstrap.ensure_nuget_marker(prefix, {"HOME": home})
+        finally:
+            os.chmod(home, 0o700)
+        want = os.path.join(prefix, "xdg-data")
+        self.assertEqual(extra, {"XDG_DATA_HOME": want})
+        self.assertTrue(os.path.isfile(os.path.join(want, "NuGet", "Migrations", "1")))
+        self.assertFalse(os.path.exists(os.path.join(home, ".local")))
+
+    def test_apply_sandbox_fixes_runs_every_time(self):
+        prefix = os.path.join(self.tmp, "p")
+        env = {"HOME": self.tmp, "HTTPS_PROXY": "http://a:1", "GRADLE_USER_HOME": os.path.join(prefix, "gradle-home")}
+        bootstrap.apply_sandbox_fixes(prefix, env, lambda s: None)
+        props = os.path.join(prefix, "gradle-home", "gradle.properties")
+        self.assertTrue(os.path.exists(props))
+        self.assertTrue(os.path.isdir(os.path.join(prefix, "nuget-packages")))
+        env.pop("HTTPS_PROXY")
+        bootstrap.apply_sandbox_fixes(prefix, env, lambda s: None)
+        self.assertFalse(os.path.exists(props))
 
 
 class PulumiVersionTest(helpers.TempDirMixin, unittest.TestCase):

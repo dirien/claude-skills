@@ -19,7 +19,8 @@ python3 scripts/bootstrap.py --profile minimal  # skip node, dotnet, java, gradl
 Each shell session needs the PATH line (`export PATH="<prefix>/bin:$PATH"`) and
 the extra exports that follow it (`GRADLE_USER_HOME=<prefix>/gradle-home`,
 always set, because `~/.gradle` is not usable in the agent runtime and Gradle
-fails without it; `JAVA_HOME`, `DOTNET_ROOT`,
+fails without it; `NUGET_PACKAGES=<prefix>/nuget-packages`, always set;
+`XDG_DATA_HOME=<prefix>/xdg-data` only when `~/.local/share` is not writable; `JAVA_HOME`, `DOTNET_ROOT`,
 `DOTNET_CLI_TELEMETRY_OPTOUT=1`, `DOTNET_NOLOGO=1`, and
 `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` only when no libicu is installed):
 stdout carries those lines first, then `# tool: version` comments; progress is
@@ -27,6 +28,15 @@ on stderr. Tools live in `$HOME/.local/pulumi-labs-export/` (`opt/` holds the
 unpacked versions, `bin/` the symlinks). Re-running skips tools already at the
 pinned version. Any failure exits 1 with the tool and reason; stop and report
 it. Nothing prints environment variables or tokens.
+
+## Sandbox fixes applied on every run
+
+Even when every tool is already installed (and not with `--check`), `bootstrap.py`
+re-applies two fixes that depend on the current session: the NuGet migrations marker
+(dotnet crashes on named mutexes without it) and the proxy block in
+`$GRADLE_USER_HOME/gradle.properties` (the Gradle JVM ignores the proxy env vars).
+Details and the failure signatures are in `runtime.md`. Proxy credentials are masked
+in every log line.
 
 ## Pins and verification
 
