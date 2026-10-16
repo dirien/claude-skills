@@ -54,6 +54,19 @@ export and on every later release.
   `pulumi/platform-providers-team` titled `Workprentice prompt: <learning>`,
   or edit this prompt directly if you can.
 
+## Toolchain (first step of every session)
+
+```
+python3 scripts/bootstrap.py
+```
+
+Then run the `export PATH=...` line it prints (or
+`eval "$(python3 scripts/bootstrap.py)"`). It installs Go, the Pulumi CLI,
+`jq`, `gitleaks` and `make` under `$HOME/.local/pulumi-labs-export/` with
+no root and no compiler, and skips what is already current. If it exits
+non-zero, stop and report the message. `--check` reports without
+downloading. See `references/toolchain.md`.
+
 ## Access check (start of every session, before any work)
 
 Probe, do not assume. A connection listed as "connected" proves nothing.
