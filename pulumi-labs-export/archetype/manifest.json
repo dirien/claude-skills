@@ -1,0 +1,79 @@
+{
+  "archetype_repo": "pulumi-labs/pulumi-nvidia-aicr",
+  "archetype_sha": "1d262e3db83fd120e8454b9162e762eaf743de8d",
+  "files": [
+    {
+      "template": "archetype/.github/workflows/release.yml.tmpl",
+      "target": ".github/workflows/release.yml",
+      "mode": "render",
+      "upstream_path": ".github/workflows/release.yml",
+      "upstream_sha256": "6c59b7d611d3cf9908d2ff0387fdd1c740ccd29ba3864c1b1f8c6f720215224e",
+      "matrix_pad": 9
+    },
+    {
+      "template": "archetype/.github/workflows/test.yml.tmpl",
+      "target": ".github/workflows/test.yml",
+      "mode": "render",
+      "upstream_path": ".github/workflows/test.yml",
+      "upstream_sha256": "27fff4fec0598fd90e8ef2dcf2bf4053957c73bf18e1f8934311a5c09262806c",
+      "matrix_pad": 8,
+      "matrix_commented_entry": true
+    },
+    {
+      "template": "archetype/.gitignore.tmpl",
+      "target": ".gitignore",
+      "mode": "verbatim",
+      "upstream_path": ".gitignore",
+      "upstream_sha256": "1f2ccd1d69abcab63afdaa4c575af0c49d5099a43ae48eb667daaba6dcd66832"
+    },
+    {
+      "template": "archetype/.vscode/launch.json.tmpl",
+      "target": ".vscode/launch.json",
+      "mode": "render",
+      "upstream_path": ".vscode/launch.json",
+      "upstream_sha256": "40feade0be9ea68617c54384c227c6e37b0109dacf683066a61c3670b9b4d780"
+    },
+    {
+      "template": "archetype/CONTRIBUTING.md.tmpl",
+      "target": "CONTRIBUTING.md",
+      "mode": "render",
+      "upstream_path": "CONTRIBUTING.md",
+      "upstream_sha256": "3a27e5fcfdfba4c55a846aad21bc46006f242aedd87835b6b7e067985c8df587"
+    },
+    {
+      "template": "archetype/LICENSE.tmpl",
+      "target": "LICENSE",
+      "mode": "verbatim",
+      "upstream_path": "LICENSE",
+      "upstream_sha256": "b5b2c20419cb3808c5d43c971632c6b8cf71e3a8923d5faab53f81128a7c83a8"
+    },
+    {
+      "template": "archetype/Makefile.tmpl",
+      "target": "Makefile",
+      "mode": "render",
+      "upstream_path": "Makefile",
+      "upstream_sha256": "f6a3c70475f21636b1fe4ac9ecbce9e03687a5d4dac4644b1cb963a772a631f4"
+    },
+    {
+      "template": "archetype/mise.toml.tmpl",
+      "target": "mise.toml",
+      "mode": "verbatim",
+      "upstream_path": "mise.toml",
+      "upstream_sha256": "ad3a98c8ceacb29ac538c89afeb50aa1b8bbe502a4bd16f80bba2172d02a6d05"
+    },
+    {
+      "template": "archetype/provider/pkg/version/version.go.tmpl",
+      "target": "provider/pkg/version/version.go",
+      "mode": "verbatim",
+      "upstream_path": "provider/pkg/version/version.go",
+      "upstream_sha256": "cc022c0f3889f9a9a5c09fab2c4ee03a625f0f24c9508f8252e3eb6498393aac"
+    },
+    {
+      "template": "archetype/scripts/fixup_python_input_optional.py.tmpl",
+      "target": "scripts/fixup_python_input_optional.py",
+      "mode": "verbatim",
+      "upstream_path": "scripts/fixup_python_input_optional.py",
+      "upstream_sha256": "a7167246614008c7dc00522ce4ebbb7643ad4551b1a2503a765639e382118974"
+    }
+  ]
+}

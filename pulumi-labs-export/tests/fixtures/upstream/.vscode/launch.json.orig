@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug nvidia-aicr provider",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/provider/cmd/pulumi-resource-nvidia-aicr",
+            "console": "integratedTerminal"
+        }
+    ]
+}

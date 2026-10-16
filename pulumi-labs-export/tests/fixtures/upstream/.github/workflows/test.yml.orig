@@ -1,0 +1,118 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-provider:
+    name: build provider (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,  goarch: amd64 }
+          - { goos: linux,  goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          # windows/amd64 is off the matrix: the NVIDIA AICR SDK does not
+          # compile for GOOS=windows (unix-only syscall.O_NOFOLLOW without
+          # build tags in pkg/evidence/internal/boundedio, pkg/collector/k8s,
+          # pkg/bundler/checksum — present in v0.18.0 and v0.19.0). Restore it
+          # once the upstream fix lands; tracked in
+          # https://github.com/NVIDIA/aicr/issues (windows cross-compilation).
+          # - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: go.sum
+      - name: Cross-compile provider
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          cd provider
+          go build ./cmd/pulumi-resource-nvidia-aicr
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: go.sum
+      - uses: pulumi/actions@v6
+        with:
+          pulumi-version: '3.241.0'
+      - name: Build provider
+        run: make provider
+      - name: Verify binary embeds a resolvable AICR SDK version
+        # recipeVersion is derived from the binary's build info at runtime;
+        # unit tests exercise that path only against fabricated build info,
+        # so assert the real artifact here.
+        run: go version -m bin/pulumi-resource-nvidia-aicr | grep -E 'github.com/NVIDIA/aicr\s+v'
+      - name: Generate schema
+        run: make schema
+      - name: Verify schema in repo matches generated schema
+        run: |
+          if ! git diff --exit-code provider/cmd/pulumi-resource-nvidia-aicr/schema.json; then
+            echo "::error::schema.json is out of date. Run 'make schema' and commit the result."
+            exit 1
+          fi
+      - name: Run vet
+        run: cd provider && go vet ./...
+      - name: Check copyright headers
+        run: make check_copyright
+      - name: Run tests
+        run: make test
+
+  build-sdks:
+    needs: test
+    name: build-sdks (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Each language SDK builds in its own parallel job. fail-fast: false
+      # so one language's failure does not cancel the others.
+      fail-fast: false
+      matrix:
+        language: [nodejs, python, go, dotnet, java]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: go.sum
+      - uses: pulumi/actions@v6
+        with:
+          pulumi-version: '3.241.0'
+      - if: matrix.language == 'nodejs'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - if: matrix.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - if: matrix.language == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - if: matrix.language == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Generate ${{ matrix.language }} SDK
+        run: make ${{ matrix.language }}_sdk sdk_fixups
+      # Go has no separate build step: `make go_sdk` already runs
+      # `go mod tidy`, which validates the generated module compiles.
+      - if: matrix.language != 'go'
+        name: Build ${{ matrix.language }} SDK
+        run: make build_${{ matrix.language }}_sdk
