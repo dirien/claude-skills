@@ -5,10 +5,17 @@
 `lib/providers/<p>/version.txt` on monorepo `main` is greater than the entry's
 `lastSyncedVersion` in `carved-providers.json`. Versions stay `0.x.y`
 (`export.py` refuses anything else). Merging other changes without a version
-bump publishes nothing.
+bump publishes nothing. `version.txt` is bumped only by the Publisher's
+release-cut PR (`lifecycle.md`, "Release cut"). Second trigger: the candidate
+sync, for a version that has no tag yet (`lifecycle.md`).
 
 ## Procedure
 
+0. Drift first. In a fresh clone of the mirror run
+   `python3 scripts/check.py --repo . --against-source <autoregistry checkout>` on the
+   mirror's `main` BEFORE exporting. Any `DRIFT` line: stop, do not sync, notify
+   Engin (`important`) with the paths. A sync overwrites the mirror, so an
+   unported hand edit would vanish silently.
 1. Fresh worktree of monorepo `origin/main` (clean; its HEAD is the source SHA).
    Run `verify.py --monorepo` if the change is large.
 2. In a fresh clone of the mirror: `git switch -c sync/v<version>`.
@@ -27,9 +34,13 @@ bump publishes nothing.
 7. Tell Engin: "ready to tag v<version>". The agent never tags.
 
 Engineering feedback on the mirror, a failing gate, a wrong doc: fix it in the
-monorepo (PR, review), merge, then run the sync again. A version bump is not
-needed for a doc fix if no release is wanted; the sync PR is simply deferred.
-Never edit the mirror, never force-push it.
+monorepo (PR, review, an `[Unreleased]` entry), merge, then sync. While the
+version in `lastSyncedVersion` has no tag in the mirror, sync the same version
+again as a candidate sync (branch `sync/v<version>-<n>`, `lifecycle.md`);
+afterwards the fix waits for the next release cut. Never edit the mirror, never
+force-push it. After step 6 the Publisher moves a card that was Published back
+to Handover with the `update` label, so that the publication check verifies the
+new version.
 
 ## Drift detection
 
