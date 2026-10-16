@@ -234,6 +234,9 @@ class GateCmdTest(helpers.TempDirMixin, unittest.TestCase):
         self.assertEqual(g.cmd("b", "b", ["sh", "-c", "echo boom; exit 3"], self.tmp)[0], "FAIL")
         self.assertEqual(g.cmd("c", "c", ["sh", "-c", "echo 'skipping nodejs SDK build (npm not installed)'"], self.tmp, fail_on_skip=True)[0], "FAIL")
         self.assertEqual(g.cmd("c2", "c", ["sh", "-c", "echo 'skipping x'"], self.tmp)[0], "PASS")
+        # setuptools notice under PYTHONDONTWRITEBYTECODE is not a skipped build
+        self.assertEqual(g.cmd("c3", "c", ["sh", "-c", "echo 'warning: build_py: byte-compiling is disabled, skipping.'"], self.tmp,
+                               fail_on_skip=True)[0], "PASS")
         self.assertEqual(g.cmd("d", "d", ["sh", "-c", "echo 'error: could not generate'"], self.tmp, error_res=verify.CODEGEN_ERROR_RES)[0], "FAIL")
         self.assertEqual(g.cmd("e", "e", ["sh", "-c", "echo 'go: finding module for package x'; echo 'warning: deprecated'"], self.tmp,
                                error_res=verify.CODEGEN_ERROR_RES, collect_warnings=True)[0], "PASS")
@@ -252,6 +255,9 @@ class GateCmdTest(helpers.TempDirMixin, unittest.TestCase):
         st, _ = g.cmd("g", "g", ["sh", "-c", "echo 'Could not GET https://plugins.gradle.org/x: Connect timed out'; exit 1"], self.tmp)
         self.assertEqual(st, "FAIL")
         self.assertIn("gradle.properties", g.steps[-1]["detail"])
+        st, _ = g.cmd("x", "x", ["sh", "-c", "echo 'Pulumi.Wandb.csproj(7,34): error MSB4025: An error occurred while parsing EntityName.'; exit 1"], self.tmp)
+        self.assertEqual(st, "FAIL")
+        self.assertIn("bare `&`", g.steps[-1]["detail"])
         st, _ = g.cmd("o", "o", ["sh", "-c", "echo boom; exit 1"], self.tmp)
         self.assertNotIn("hint:", g.steps[-1]["detail"])
 
