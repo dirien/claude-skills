@@ -443,6 +443,15 @@ def consumer_main_go(import_path, symbol):
     return 'package main\n\nimport sdk "%s"\n\n%s\n\nfunc main() {}\n' % (import_path, ref)
 
 
+SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$")
+
+
+def real_sdk_version(v):
+    """True if v is a concrete version. gen-sdk leaves the placeholder ${VERSION} in sdk/nodejs/package.json until
+    `make set_version` runs; passing that to make as VERSION=${VERSION} is a recursive variable error."""
+    return isinstance(v, str) and SEMVER_RE.match(v) is not None
+
+
 def go_sdk_dir_for(root, schema):
     """Locate the generated Go SDK dir (relative to root) from the schema's importBasePath."""
     base = (((schema or {}).get("language") or {}).get("go") or {}).get("importBasePath") or ""
@@ -722,7 +731,7 @@ def run_repo(repo, prefix, report_dir, keep=False):
                 sdkv = json.load(f).get("version")
         except (OSError, ValueError):
             pass
-        argv = ["make", "sdks"] + (["VERSION=" + sdkv] if sdkv else [])
+        argv = ["make", "sdks"] + (["VERSION=" + sdkv] if real_sdk_version(sdkv) else [])
         gate.cmd("make_sdks", " ".join(argv), argv, clone, error_res=CODEGEN_ERROR_RES, collect_warnings=True)
         _, por = git(clone, "status", "--porcelain", "--", "sdk")
         if por.strip():

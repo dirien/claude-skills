@@ -172,7 +172,8 @@ class ExtraToolPinTest(helpers.TempDirMixin, unittest.TestCase):
     def test_toolchain_env(self):
         specs = bootstrap.tool_specs("amd64", "3.241.0")
         prefix = os.path.join(self.tmp, "p")
-        self.assertEqual(bootstrap.toolchain_env(prefix, specs, icu=True), {})
+        # Gradle's user home is always set, even before any tool is unpacked.
+        self.assertEqual(bootstrap.toolchain_env(prefix, specs, icu=True), {"GRADLE_USER_HOME": os.path.join(prefix, "gradle-home")})
         os.makedirs(bootstrap.install_dir(prefix, specs["java"]))
         os.makedirs(bootstrap.install_dir(prefix, specs["dotnet"]))
         env = bootstrap.toolchain_env(prefix, specs, icu=False)
@@ -182,6 +183,38 @@ class ExtraToolPinTest(helpers.TempDirMixin, unittest.TestCase):
         self.assertEqual(env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"], "1")
         self.assertNotIn("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", bootstrap.toolchain_env(prefix, specs, icu=True))
         self.assertEqual(bootstrap.export_line("JAVA_HOME", "/a b/$x"), 'export JAVA_HOME="/a b/\\$x"')
+
+    def test_gradle_user_home_in_env_and_printed_exports(self):
+        prefix = os.path.join(self.tmp, "p")
+        want = os.path.join(prefix, "gradle-home")
+        specs = bootstrap.tool_specs("amd64", "3.241.0")
+        self.assertEqual(bootstrap.toolchain_env(prefix, specs, icu=True)["GRADLE_USER_HOME"], want)
+        lines = []
+        # --check on an empty prefix prints nothing to eval; drive the real export path with a stubbed install.
+        orig = (bootstrap.install_spec, bootstrap.check_spec, bootstrap.install_make, bootstrap.detect_arch, bootstrap.sys.platform)
+        try:
+            bootstrap.install_spec = lambda spec, prefix, log: None
+            bootstrap.check_spec = lambda spec, prefix, specs=None: ("ok", "stub")
+            bootstrap.install_make = lambda prefix, arch, log: "stub"
+            bootstrap.detect_arch = lambda machine=None: "amd64"
+            bootstrap.sys.platform = "linux"
+            rc = bootstrap.main(["--prefix", prefix], out=lines.append, err=lambda s: None)
+        finally:
+            bootstrap.install_spec, bootstrap.check_spec, bootstrap.install_make, bootstrap.detect_arch, bootstrap.sys.platform = orig
+        self.assertEqual(rc, 0)
+        self.assertIn('export GRADLE_USER_HOME="%s"' % want, lines)
+        self.assertTrue(os.path.isdir(want))
+
+    def test_gradle_is_run_with_the_gradle_home(self):
+        prefix = os.path.join(self.tmp, "p")
+        bindir = os.path.join(prefix, "bin")
+        os.makedirs(bindir)
+        helpers.write(bindir, "gradle", '#!/bin/sh\n[ -n "$GRADLE_USER_HOME" ] || exit 3\necho "Gradle 9.8.1 $GRADLE_USER_HOME"\n')
+        os.chmod(os.path.join(bindir, "gradle"), 0o755)
+        specs = bootstrap.tool_specs("amd64", "3.241.0")
+        status, detail = bootstrap.check_spec(specs["gradle"], prefix, specs)
+        self.assertEqual(status, "ok", detail)
+        self.assertIn(os.path.join(prefix, "gradle-home"), detail)
 
     def test_full_check_reports_new_tools_missing(self):
         lines = []

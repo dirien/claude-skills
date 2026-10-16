@@ -8,6 +8,14 @@ Run before every push and before every release:
 Reports ALL failures (not just the first) and exits 1 if there are any.
 Everything is derived from the provider recorded in .pulumi-labs-export.json
 by render.py; nothing is typed by hand.
+
+Drift detection for a repo produced by export.py (the generated mirror):
+
+    python3 scripts/check.py --repo ../pulumi-modal --against-source ../autoregistry
+
+re-runs the export at the source SHA recorded in .pulumi-labs-export.json
+(local git only) and lists every path that differs, except sdk/ and the
+generated schema file. A hand edit in the mirror shows up as drift.
 """
 import argparse
 import difflib
@@ -90,8 +98,11 @@ def _first_diff(expected, actual):
     return "\n".join("      " + line for line in diff[:12])
 
 
-def check_repo(repo):
-    """Run every check against repo and return a list of failure strings."""
+def check_repo(repo, against_source=None):
+    """Run every check against repo and return a list of failure strings.
+
+    With against_source (an autoregistry checkout) the mirror is also compared with a fresh export.
+    """
     fails = []
     repo = os.path.abspath(repo)
     opt_path = os.path.join(repo, render.OPTIONS_FILE)
@@ -232,7 +243,7 @@ def check_repo(repo):
     if tracked is not None:
         for rel in sorted(tracked):
             full = os.path.join(repo, rel)
-            if not os.path.isfile(full) or rel == "go.sum":
+            if not os.path.isfile(full) or rel in ("go.sum", render.OPTIONS_FILE):
                 continue
             try:
                 if os.path.getsize(full) > MAX_SCAN_BYTES:
@@ -280,14 +291,31 @@ def check_repo(repo):
                 with open(full, encoding="utf-8", errors="replace") as f:
                     if not hdr.search(f.read()):
                         fails.append("MISSING copyright header (\"Copyright ... Pulumi Corporation\"): %s" % os.path.relpath(full, repo))
+
+    # 11. Drift against the monorepo source (mirror model).
+    if against_source:
+        fails.extend(_drift_failures(repo, against_source))
     return fails
+
+
+def _drift_failures(repo, against_source):
+    import export  # lazy: export imports this module
+    try:
+        diffs = export.drift(repo, against_source)
+    except export.ExportError as e:
+        return ["DRIFT check could not run: %s" % e]
+    return ["DRIFT %s" % d for d in diffs] + (
+        ["DRIFT means the mirror was edited by hand or is stale. Fixes land in the monorepo first, then re-sync: "
+         "re-run export.py on a fresh branch (references/sync.md). Never patch the mirror."] if diffs else [])
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", required=True, help="the carved repo directory")
+    ap.add_argument("--against-source", metavar="MONOREPO",
+                    help="also compare with a fresh export at the recorded source SHA from this autoregistry checkout (local git only)")
     args = ap.parse_args(argv)
-    fails = check_repo(args.repo)
+    fails = check_repo(args.repo, args.against_source)
     if fails:
         print("check FAILED: %d problem(s)" % len(fails), file=sys.stderr)
         for i, f in enumerate(fails, 1):

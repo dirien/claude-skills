@@ -1,6 +1,6 @@
 ---
 name: pulumi-labs-export
-description: Move a provider out of the private pulumi/autoregistry monorepo (lib/providers/<provider>/) into a public pulumi-labs/pulumi-<provider> repo and keep it publishing. Use when asked to export, carve out, publish, release or onboard an autoregistry provider to pulumi-labs, to run the pre-push/pre-release gate on such a repo, or to file the npm/PyPI/NuGet/Maven/ESC onboarding issues for one. Covers fixed package naming, the access check, vendored archetype scaffolding rendered by script (never hand-copied), the verification gate (builds all five SDKs, default-provider and credential checks, nothing is pushed without a passing report), secret scan, and the experimental 0.x.y rules.
+description: Mirror a provider from the private pulumi/autoregistry monorepo (lib/providers/<provider>/, stays the source of truth) into a generated public pulumi-labs/pulumi-<provider> repo, and re-sync it on every new version. Use when asked to export, carve out, publish, release or onboard an autoregistry provider to pulumi-labs, to run the pre-push/pre-release gate on such a repo, or to file the npm/PyPI/NuGet/Maven/ESC onboarding issues for one. Covers fixed package naming, the access check, the deterministic export.py and drift check, the sync flow, vendored archetype scaffolding rendered by script (never hand-copied), the verification gate (builds all five SDKs, default-provider and credential checks, nothing is pushed without a passing report), secret scan, and the experimental 0.x.y rules.
 ---
 
 # Autoregistry Publisher: pulumi-labs export
@@ -24,11 +24,11 @@ every `scripts/...` path from there. If the fetched SKILL.md differs from
 the one you were given, follow the fetched one and report that the uploaded
 copy is stale. See `references/runtime.md`.
 
-You move providers out of the private `pulumi/autoregistry` repo into
-public `pulumi-labs/pulumi-<provider>` repos and keep them publishing
+You mirror providers from the private `pulumi/autoregistry` repo into
+public `pulumi-labs/pulumi-<provider>` repos and keep them in sync
 without breaking customers.
 
-All scripts are Python 3 standard library plus `gh` and `git` (`archetype_drift.py` needs neither). Run them as
+All scripts are Python 3 standard library plus `gh` and `git` (`archetype_drift.py` and `export.py` never call `gh` or the network; `export.py --generate` runs `make`, which downloads Go modules). Run them as
 `python3 scripts/<x>.py` from this skill's folder; every one has `--help`
 and exits non-zero with an exact message. Details live in `references/`.
 
@@ -80,7 +80,9 @@ python3 scripts/bootstrap.py
 ```
 
 Then run the `export PATH=...` line it prints (or
-`eval "$(python3 scripts/bootstrap.py)"`). It installs Go, the Pulumi CLI,
+`eval "$(python3 scripts/bootstrap.py)"`). It always exports
+`GRADLE_USER_HOME=<prefix>/gradle-home` (Gradle fails without a usable
+user home in the agent runtime). It installs Go, the Pulumi CLI,
 `jq`, `gitleaks`, `make`, Node.js 22, the .NET 8 SDK, Temurin JDK 17 and
 Gradle 9 under `$HOME/.local/pulumi-labs-export/` with no root and no
 compiler, and skips what is already current. The eval line also exports
@@ -126,73 +128,68 @@ credentials. If the target repo does not exist, you cannot create it;
 file an issue asking a pulumi-labs admin to create it and grant the
 Workprentice app push.
 
-## Target layout (copy pulumi-labs/pulumi-nvidia-aicr)
+## The mirror model
 
-The archetype is vendored in `archetype/` at a pinned SHA (see
-`archetype/manifest.json`) and written into the repo by `scripts/render.py`.
-Never hand-copy it, never hand-edit a file it writes, never improvise the
-Makefile or the workflows: `scripts/check.py` fails the build if you do.
-`scripts/archetype_drift.py` reports upstream changes to the archetype; those
-go to a human, they are never merged silently. See `references/archetype.md`.
+- The monorepo provider `lib/providers/<p>/` stays the **source of truth**
+  and keeps being maintained there by other agents. It is never deleted.
+- `pulumi-labs/pulumi-<p>` is a **generated mirror**. On each new provider
+  version you OVERWRITE it with a fresh `scripts/export.py` run. Nobody edits
+  it by hand; `check.py --against-source` reports any hand edit as drift.
+- **Fixes always land in the monorepo first, then sync.** That includes
+  engineering feedback on the mirror. Never patch the mirror.
+- The provider is listed in the monorepo root `carved-providers.json`
+  (`mode: "mirror"`; fields `name`, `repo`, `goModule`, `mode`,
+  `registryName`, `listed`, `exportedAt`, `lastSyncedCommit`,
+  `lastSyncedVersion`). Mirrored providers are never released from the
+  monorepo (`plan-release.sh` refuses them). Only people tag the mirror; you
+  never tag. Versions stay `0.x.y`.
 
-- Root: `go.mod` (module `github.com/pulumi-labs/pulumi-<provider>`),
-  `go.sum`, `Makefile`, `mise.toml`, `LICENSE`, `README.md`,
-  `CONTRIBUTING.md`, `CLAUDE.md`, `docs/`, `examples/`, `scripts/`, `sdk/`.
-- Provider code in `provider/cmd` and `provider/pkg`. No `go.mod` under
-  `provider/`.
-- Generated SDKs committed under `sdk/` for dotnet, go, java, nodejs,
-  python.
-- Workflows: `.github/workflows/release.yml` and `test.yml`, rendered from
-  the archetype, changing only provider specific values.
-- Written by render.py: `Makefile`, `CONTRIBUTING.md`, both workflows,
-  `.vscode/launch.json`, `LICENSE`, `mise.toml`, `.gitignore`,
-  `scripts/fixup_python_input_optional.py`, `provider/pkg/version/version.go`,
-  and `.pulumi-labs-export.json` (the record check.py re-renders from).
-- Written by you: `README.md`, `CLAUDE.md` (from the monorepo provider's
-  `skills/SKILLS.md`), `docs/_index.md`, `docs/installation-configuration.md`,
-  `examples/`, `go.mod`/`go.sum`, `provider/`, `sdk/`.
+The mirror's layout is the archetype's (copy of `pulumi-labs/pulumi-nvidia-aicr`,
+vendored in `archetype/`, written by `render.py` which `export.py` calls; see
+`references/archetype.md`). Root `go.mod`/`go.sum`, `Makefile`, workflows,
+`README.md`, `CLAUDE.md`, `docs/`, `examples/`, `templates/`, `provider/cmd`,
+`provider/pkg`, generated `sdk/` and `schema.json`. Never hand-copy or
+hand-edit an archetype file; `check.py` fails if you do.
 
-## Export procedure
+## Procedure
 
-1. Audit on fresh `main` (never a stale clone). Run
-   `python3 scripts/verify.py --monorepo <autoregistry checkout> --provider <provider>`
-   and **stop if it fails**: it builds, vets and tests the provider, generates
-   and builds all five SDKs, and runs the default-provider and credential
-   checks. Failures are fixed in the monorepo (PR to `pulumi/autoregistry`),
-   never patched in the external repo. Then confirm no imports of other
-   autoregistry packages, and list every namespace hit with file and line. Repo level CI in autoregistry does
-   not come along; plan for it. Check that `GOOS=windows go build` works;
-   if not, you will pass `--exclude-platform` with a reason in step 5.
-2. `git subtree split --prefix=lib/providers/<provider>` to keep history,
-   into a fresh working clone. The split needs a full, non-shallow,
-   unfiltered clone of `pulumi/autoregistry` (about 12 MB); not
-   `--depth` and not `--filter`. Never push from the monorepo checkout.
-3. Commit: restructure to the archetype layout (move `go.mod`/`go.sum` from
-   `provider/` to root, delete `version.txt` and the monorepo `Makefile`;
-   the version comes from the git tag and the ldflags path is
-   `github.com/pulumi-labs/pulumi-<provider>/provider/pkg/version`).
-4. Commit: namespace rewrite, nothing else in it. Includes the provider
-   metadata set in code (repository, publisher, plugin download URL, Go import
-   path, language names), using the values from `names.py`.
-5. Commit: run `python3 scripts/render.py --repo-dir <repo> --provider <p>
-   --display-name "<Name>"` (add `--exclude-platform goos/goarch --reason "..."`
-   for each platform that cannot build), then README, `CLAUDE.md`, `docs/`.
-6. Mark experimental: README banner and every package description (provider
-   description, schema `description`, `language.nodejs.packageDescription`).
-   Version stays `0.x.y`. Then `make schema` and `make sdks VERSION=<0.x.y>`
-   and commit the regenerated schema and `sdk/`.
-7. Gate. All of these must pass before the first push:
-   - `python3 scripts/verify.py --repo <repo>` on the exact commit to push
-     (full build gate, includes `check.py`; see "Before every push").
-   - Secret scan of the split history. The monorepo is private and the
-     target is public, so every historic commit becomes public. Use
-     `gitleaks git --redact <repo>` if gitleaks is installed. If it is not,
-     say "history was not scanned for secrets" and stop for a human; do not
-     push. Any finding also stops for a human.
-   - Onboarding issues filed (below).
-8. Run `python3 scripts/verify.py --assert-pushable --repo <repo>` immediately
-   before the push. Push once it exits 0 and the workflows are in place. Do not tag a
-   release until every onboarding issue is closed.
+Per provider, in order. Details: `references/export.md` (a to d) and
+`references/sync.md` (e).
+
+**a. Readiness.** On fresh `main`:
+`python3 scripts/verify.py --monorepo <autoregistry checkout> --provider <p>`.
+Stop if it fails; fix it in the monorepo.
+
+**b. Identity switch in the monorepo.** One PR to `pulumi/autoregistry`, with
+Reviewer clearance on the head SHA and green checks, before any export. It
+carries: the `carved-providers.json` entry (`listed: false`, nullable sync
+fields `null`); the builder metadata (`WithPublisher("Pulumi Labs")`,
+`WithRepository`, `WithGoImportPath`, `WithPluginDownloadURL`,
+`WithLanguageMap` with the nodejs/python/csharp/java names, and
+"experimental" in `WithDescription` and the nodejs `packageDescription`);
+the same identity in the README, examples, templates and tests (Go
+imports and `go.mod` requires, and the npm, Python, .NET and Java names);
+copyright headers; and the two `docs/` Registry pages. `export.py` refuses
+until all of it is in. Names come from `names.py`, never typed by hand.
+
+**c. Initial export.** Full non-shallow unfiltered clone of the monorepo,
+`git subtree split --prefix=lib/providers/<p>` to keep history, pull it into
+the empty mirror clone, run `export.py --out . --generate`, commit as
+`Export pulumi/autoregistry@<sha>`. Then gitleaks over the full history,
+`verify.py`, `verify.py --assert-pushable`, push `main` (the one allowed
+direct push), wait for the `test` workflow to go green, and open a monorepo
+PR setting `exportedAt`, `lastSyncedCommit`, `lastSyncedVersion`.
+
+**d. Onboarding issues.** `scripts/onboarding.py` (below). Do not ask for a
+tag until every onboarding issue is closed.
+
+**e. Sync on every new version.** Trigger: `lib/providers/<p>/version.txt` on
+monorepo `main` is greater than the entry's `lastSyncedVersion`. Branch
+`sync/v<version>` in the mirror, `export.py --out . --generate`, commit
+`Sync pulumi/autoregistry@<sha> (v<version>)`, `verify.py`,
+`--assert-pushable`, push the branch, open a PR, get Reviewer clearance and
+green CI, squash-merge. Then a monorepo PR updates the sync fields. Then tell
+Engin "ready to tag v<version>". Never tag.
 
 ## Before every push (initial import and every later PR branch)
 
@@ -223,8 +220,9 @@ or `com.pulumi.<p>` in any tracked file; experimental marking; every `v*` tag
 is `v0.x.y`; copyright headers. Fix the cause, never the check. If a check
 seems wrong or an archetype file needs a change, stop and report it.
 
-`references/carving.md` has the monorepo-to-public mapping, with
-`lib/providers/modal/` as the worked example.
+`references/export.md` has the monorepo-to-mirror mapping and the checklist
+for step b; `check.py --repo <mirror> --against-source <monorepo>` adds drift
+detection (see `references/sync.md`).
 
 ## Onboarding issues per provider
 
@@ -248,14 +246,12 @@ Go needs no issue. See `references/onboarding.md`.
 
 ## Each later release
 
-Run `python3 scripts/verify.py --repo <repo>` on the release commit before
-publishing, then `--assert-pushable` before the push or tag. Any
+Follow step e. If check.py says the archetype changed (the SHA recorded in
+`.pulumi-labs-export.json` differs from the vendored one), the next
+`export.py` run already re-renders it; review the diff in the sync PR. Any
 `pulumi/autoregistry` or `pulumi/pulumi-<provider>` reference is a release
-blocker. If check.py says the archetype changed (the SHA recorded in
-`.pulumi-labs-export.json` differs from the vendored one), re-run
-`render.py --repo-dir <repo>`, review the diff, and commit it on its own,
-then check again. Avoid breaking changes; if one is unavoidable, bump the
-minor and say so in the release notes. Tags are `v0.x.y` while experimental.
+blocker. Avoid breaking changes; if one is unavoidable, bump the minor and say
+so in the release notes. Tags are `v0.x.y` while experimental, made by people.
 
 ## Working with other agents
 

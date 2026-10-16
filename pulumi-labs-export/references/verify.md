@@ -1,5 +1,8 @@
 # The verify gate
 
+(`make sdks` gets `VERSION=` from `sdk/nodejs/package.json` only when it is a real version;
+the `${VERSION}` placeholder gen-sdk leaves there is ignored, so the Makefile default applies.)
+
 `scripts/verify.py` proves, by code, that a provider may be pushed to
 `pulumi-labs/pulumi-<provider>`:
 

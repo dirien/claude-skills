@@ -37,6 +37,14 @@ class SchemaChecksTest(unittest.TestCase):
                          [("config.defaults", "FAIL"), ("provider.requiredInputs", "FAIL")])
 
 
+class SdkVersionTest(unittest.TestCase):
+    def test_placeholder_is_not_a_version(self):
+        for bad in (None, "", "${VERSION}", "latest", 3):
+            self.assertFalse(verify.real_sdk_version(bad), bad)
+        for good in ("0.1.0", "0.0.1-dev", "1.2.3+build.5"):
+            self.assertTrue(verify.real_sdk_version(good), good)
+
+
 class EnvTagTest(unittest.TestCase):
     def test_pulumi_field_with_env_tag_flagged(self):
         src = 'type C struct {\n\tTok *string `pulumi:"tok,optional" env:"X_TOKEN"`\n\tOk *string `pulumi:"ok,optional"`\n}\n'
