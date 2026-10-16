@@ -7,7 +7,7 @@
 
 ## Overview
 
-Pulumi IaC and Flux CD GitOps skills for Claude Code. Seven skills: TypeScript, Go, Python, Neo (AI agent), CLI reference, Flux CLI, Flux Operator CLI.
+Pulumi IaC and Flux CD GitOps skills for Claude Code. Eight skills: TypeScript, Go, Python, Neo (AI agent), CLI reference, Flux CLI, Flux Operator CLI, Pulumi Labs export.
 Distributed via Tessl tile (`tile.json`) and `.claude-plugin/marketplace.json`.
 
 ## File Map
@@ -19,6 +19,7 @@ Distributed via Tessl tile (`tile.json`) and `.claude-plugin/marketplace.json`.
 | `pulumi-cli/` | Pulumi CLI reference (`SKILL.md` + `references/` + `evals/`) |
 | `flux-cli/` | Flux CD CLI reference (`SKILL.md` + `references/`) |
 | `flux-operator-cli/` | Flux Operator CLI reference (`SKILL.md` + `references/`) |
+| `pulumi-labs-export/` | Autoregistry provider export to pulumi-labs (`SKILL.md` + `references/` + `scripts/` + `archetype/` + `tests/` + `evals/`) |
 | `tile.json` | Tessl tile config (name, version, skill paths) |
 | `.claude-plugin/marketplace.json` | Plugin marketplace manifest |
 | `.github/workflows/publish-tile.yml` | Publishes tile on push to `main` via `tesslio/publish` |

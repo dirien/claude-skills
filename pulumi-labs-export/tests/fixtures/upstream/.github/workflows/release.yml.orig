@@ -1,0 +1,305 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write   # required to create GitHub Releases
+
+jobs:
+  build-provider:
+    name: build provider (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One platform's failure must not cancel the others: fail-fast cancelled
+      # every build when windows/amd64 broke, which skipped the GitHub Release
+      # and left the v0.3.0 tag with SDKs published but no provider binaries.
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          # windows/amd64 is off the matrix: the NVIDIA AICR SDK does not
+          # compile for GOOS=windows (unix-only syscall.O_NOFOLLOW without
+          # build tags in pkg/evidence/internal/boundedio, pkg/collector/k8s,
+          # pkg/bundler/checksum — present in v0.18.0 and v0.19.0). Restore it
+          # once the upstream fix lands; tracked in
+          # https://github.com/NVIDIA/aicr/issues (windows cross-compilation).
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: go.sum
+      - name: Compute version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Build provider binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          out="dist/pulumi-resource-nvidia-aicr${ext}"
+          (cd provider && go build \
+            -ldflags "-X github.com/pulumi-labs/pulumi-nvidia-aicr/provider/pkg/version.Version=${{ steps.ver.outputs.version }}" \
+            -o "../${out}" \
+            ./cmd/pulumi-resource-nvidia-aicr)
+          tar -czf "dist/pulumi-resource-nvidia-aicr-v${{ steps.ver.outputs.version }}-${GOOS}-${GOARCH}.tar.gz" \
+            -C dist "pulumi-resource-nvidia-aicr${ext}"
+          rm -f "${out}"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: provider-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  generate-sdks:
+    name: generate SDKs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: go.sum
+      - uses: pulumi/actions@v6
+        with:
+          pulumi-version: '3.241.0'
+      - name: Compute version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Build provider with release version
+        run: make provider VERSION=${{ steps.ver.outputs.version }}
+      - name: Generate all SDKs
+        run: make sdks VERSION=${{ steps.ver.outputs.version }}
+      - name: Stamp version into SDK manifests (fallback)
+        run: make set_version VERSION=${{ steps.ver.outputs.version }}
+      - name: Upload SDK artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: sdks
+          path: sdk/
+          if-no-files-found: error
+
+  publish-github-release:
+    name: publish GitHub Release
+    needs: [build-provider, generate-sdks]
+    # A failed provider matrix leg must not strand artifacts from successful
+    # platforms. The copy step below still fails if no provider artifacts exist.
+    if: ${{ !cancelled() && needs.generate-sdks.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+      - name: Bundle SDK source archives
+        run: |
+          mkdir -p release
+          cp artifacts/provider-*/*.tar.gz release/
+          cd artifacts/sdks
+          for lang in nodejs python go dotnet java; do
+            if [ -d "$lang" ]; then
+              tar -czf "../../release/sdk-${lang}-${GITHUB_REF_NAME}.tar.gz" "$lang"
+            fi
+          done
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          token: ${{ github.token }}
+
+  # The Go SDK is shipped via a path-prefixed tag (`sdk/go/nvidiaaicr/vX.Y.Z`)
+  # that the Go proxy fetches from. The committed `sdk/go/` source has a
+  # placeholder version baked in by `pulumi package gen-sdk` at codegen time,
+  # so we cannot simply tag the merge commit on main: that would publish the
+  # stale, placeholder-versioned source. `pulumi/publish-go-sdk-action`
+  # creates a release-specific commit with the freshly regenerated SDK files
+  # (downloaded from the `generate-sdks` artifact) and pushes the tag against
+  # *that* commit, which is what the Go proxy serves.
+  publish-go-sdk:
+    name: publish Go SDK
+    needs: generate-sdks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download SDK artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: sdks
+          path: sdk
+      - name: Compute version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Publish Go SDK
+        uses: pulumi/publish-go-sdk-action@v1
+        with:
+          repository: ${{ github.repository }}
+          base-ref: ${{ github.sha }}
+          source: sdk/go/nvidiaaicr
+          path: sdk/go/nvidiaaicr
+          version: ${{ steps.ver.outputs.version }}
+
+  publish-nodejs:
+    name: publish to npm
+    needs: generate-sdks
+    runs-on: ubuntu-latest
+    environment: publish-npm
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          # Trusted publishing requires Node >= 22.14 and npm >= 11.5.1.
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Ensure npm meets the trusted-publishing floor
+        # Node 22 ships with npm 10; bump to the documented minimum.
+        run: npm install -g npm@11.5.1
+      - uses: actions/download-artifact@v5
+        with:
+          name: sdks
+          path: sdk
+      - name: Install and build
+        run: cd sdk/nodejs && npm install && npm run build
+      - name: Publish
+        run: |
+          cd sdk/nodejs
+          VER=$(node -p "require('./package.json').version")
+          if [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+-([a-zA-Z]+) ]]; then
+            NPM_TAG="${BASH_REMATCH[1]}"
+          else
+            NPM_TAG=latest
+          fi
+          npm publish --access public --tag "$NPM_TAG"
+
+  publish-python:
+    name: publish to PyPI
+    needs: generate-sdks
+    runs-on: ubuntu-latest
+    # PyPI's pending Trusted Publisher is bound to this exact environment
+    # name and workflow filename; both must match for OIDC to be accepted.
+    environment: publish-pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v5
+        with:
+          name: sdks
+          path: sdk
+      - name: Build distributions
+        run: |
+          cd sdk/python
+          python -m pip install --upgrade build
+          python -m build --sdist --wheel
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdk/python/dist
+
+  publish-dotnet:
+    name: publish to NuGet
+    needs: generate-sdks
+    runs-on: ubuntu-latest
+    # NuGet's Trusted Publisher policy is bound to (repo owner, repo,
+    # workflow filename, optional environment). The environment here must
+    # match the policy on nuget.org.
+    environment: publish-nuget
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      # Fetch NUGET_USER (the nuget.org policy-owner profile slug; not
+      # secret but kept in ESC for consistency with the rest of the
+      # publishing config).
+      - id: esc-secrets
+        uses: pulumi/esc-action@32dda43ffe7a2ab21e6bce11c781b44a3e5623cf # v3
+        env:
+          ESC_ACTION_ENVIRONMENT: github-secrets/${{ github.repository_owner }}-${{ github.event.repository.name }}
+          ESC_ACTION_EXPORT_ENVIRONMENT_VARIABLES: "false"
+          ESC_ACTION_OIDC_AUTH: "true"
+          ESC_ACTION_OIDC_ORGANIZATION: pulumi
+          ESC_ACTION_OIDC_REQUESTED_TOKEN_TYPE: urn:pulumi:token-type:access_token:organization
+      - uses: actions/setup-dotnet@v4
+        with:
+          # The generated csproj targets net6.0; building it from the
+          # runner's preinstalled SDK 10 needs the 6.0 ref assemblies.
+          dotnet-version: |
+            6.0.x
+            8.0.x
+      - uses: actions/download-artifact@v5
+        with:
+          name: sdks
+          path: sdk
+      - name: Build
+        run: cd sdk/dotnet && dotnet build -c Release
+      - name: Pack
+        run: cd sdk/dotnet && dotnet pack -c Release -o nupkgs --no-build
+      # Exchange the GitHub OIDC token for a short-lived (~1h, single-use)
+      # nuget.org API key. `user` is the policy owner's nuget.org profile
+      # slug (can be a user or an organization slug).
+      - uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: ${{ steps.esc-secrets.outputs.NUGET_USER }}
+      - name: Push
+        run: |
+          cd sdk/dotnet
+          dotnet nuget push 'nupkgs/*.nupkg' \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}"
+
+  publish-java:
+    name: publish to Maven Central
+    needs: generate-sdks
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - id: esc-secrets
+        uses: pulumi/esc-action@32dda43ffe7a2ab21e6bce11c781b44a3e5623cf # v3
+        env:
+          ESC_ACTION_ENVIRONMENT: github-secrets/${{ github.repository_owner }}-${{ github.event.repository.name }}
+          ESC_ACTION_EXPORT_ENVIRONMENT_VARIABLES: "false"
+          ESC_ACTION_OIDC_AUTH: "true"
+          ESC_ACTION_OIDC_ORGANIZATION: pulumi
+          ESC_ACTION_OIDC_REQUESTED_TOKEN_TYPE: urn:pulumi:token-type:access_token:organization
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - uses: actions/download-artifact@v5
+        with:
+          name: sdks
+          path: sdk
+      - name: Publish to Sonatype
+        working-directory: sdk/java
+        env:
+          SIGNING_KEY: ${{ steps.esc-secrets.outputs.MAVEN_CENTRAL_SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ steps.esc-secrets.outputs.MAVEN_CENTRAL_SIGNING_PASSWORD }}
+          PUBLISH_REPO_USERNAME: ${{ steps.esc-secrets.outputs.MAVEN_CENTRAL_OSSRH_USERNAME }}
+          PUBLISH_REPO_PASSWORD: ${{ steps.esc-secrets.outputs.MAVEN_CENTRAL_OSSRH_PASSWORD }}
+        run: gradle publishToSonatype closeAndReleaseSonatypeStagingRepository

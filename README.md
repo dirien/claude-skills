@@ -13,6 +13,7 @@ Custom [Claude Code](https://claude.ai/claude-code) skills for infrastructure as
 | [pulumi-cli](./pulumi-cli/) | Pulumi CLI command reference for deployments and stack management |
 | [flux-cli](./flux-cli/) | Flux CD CLI reference for GitOps bootstrapping, sources, kustomizations, and Helm releases |
 | [flux-operator-cli](./flux-operator-cli/) | Flux Operator CLI reference for building manifests, diffing YAML, and managing FluxInstance resources |
+| [pulumi-labs-export](./pulumi-labs-export/) | Export autoregistry providers to public pulumi-labs repos, with a verification gate and onboarding issues |
 
 ## Features
 
@@ -42,6 +43,7 @@ Add the marketplace and install individual skills:
 /plugin install pulumi-cli@pulumi-skills
 /plugin install flux-cli@pulumi-skills
 /plugin install flux-operator-cli@pulumi-skills
+/plugin install pulumi-labs-export@pulumi-skills
 ```
 
 ### Option 2: Skills.sh
@@ -67,6 +69,7 @@ ln -s $(pwd)/claude-skills/pulumi-neo ~/.claude/skills/pulumi-neo
 ln -s $(pwd)/claude-skills/pulumi-cli ~/.claude/skills/pulumi-cli
 ln -s $(pwd)/claude-skills/flux-cli ~/.claude/skills/flux-cli
 ln -s $(pwd)/claude-skills/flux-operator-cli ~/.claude/skills/flux-operator-cli
+ln -s $(pwd)/claude-skills/pulumi-labs-export ~/.claude/skills/pulumi-labs-export
 ```
 
 ### Option 4: Project-level skills
