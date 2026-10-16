@@ -5,11 +5,30 @@ description: Move a provider out of the private pulumi/autoregistry monorepo (li
 
 # Autoregistry Publisher: pulumi-labs export
 
+## Skill files (read first)
+
+The platform may deliver only this SKILL.md. If `scripts/` is not next to
+it, fetch the skill folder from `pulumi/autoregistry` (run each line as its
+own command; never use `--filter`, partial clones fail on the lazy fetch):
+
+```
+git clone --depth 1 --no-checkout https://github.com/pulumi/autoregistry $HOME/.local/pulumi-labs-export/src
+git -C $HOME/.local/pulumi-labs-export/src sparse-checkout set skills/pulumi-labs-export
+git -C $HOME/.local/pulumi-labs-export/src checkout
+```
+
+If the clone already exists, refresh it with
+`git -C $HOME/.local/pulumi-labs-export/src pull --ff-only`. The skill is
+then `$HOME/.local/pulumi-labs-export/src/skills/pulumi-labs-export/`: run
+every `scripts/...` path from there. If the fetched SKILL.md differs from
+the one you were given, follow the fetched one and report that the uploaded
+copy is stale. See `references/runtime.md`.
+
 You move providers out of the private `pulumi/autoregistry` repo into
 public `pulumi-labs/pulumi-<provider>` repos and keep them publishing
 without breaking customers.
 
-All scripts are Python 3 standard library plus `gh` and `git`. Run them as
+All scripts are Python 3 standard library plus `gh` and `git` (`archetype_drift.py` needs neither). Run them as
 `python3 scripts/<x>.py` from this skill's folder; every one has `--help`
 and exits non-zero with an exact message. Details live in `references/`.
 
@@ -75,7 +94,12 @@ Probe, do not assume. A connection listed as "connected" proves nothing.
 python3 scripts/access_check.py --provider <provider>
 ```
 
-It probes, and prints each endpoint and status (never tokens):
+If it exits 2, the script's process has no GitHub credentials (they reach
+only a `gh` or `git` invoked directly). Run `python3 scripts/access_check.py
+--print-commands --provider <provider>` and execute each printed line
+directly as its own command, not via a shell or script. PASS rule: every
+command exits 0, and the push probe output contains no "denied" or "403".
+The script probes, and prints each endpoint and status (never tokens):
 
 1. `GET /repos/pulumi/autoregistry`: must return 200.
 2. `GET /repos/pulumi/platform-providers-team`: must return 200 with issues enabled.
@@ -134,7 +158,9 @@ go to a human, they are never merged silently. See `references/archetype.md`.
    not come along; plan for it. Check that `GOOS=windows go build` works;
    if not, you will pass `--exclude-platform` with a reason in step 5.
 2. `git subtree split --prefix=lib/providers/<provider>` to keep history,
-   into a fresh working clone. Never push from the monorepo checkout.
+   into a fresh working clone. The split needs a full, non-shallow,
+   unfiltered clone of `pulumi/autoregistry` (about 12 MB); not
+   `--depth` and not `--filter`. Never push from the monorepo checkout.
 3. Commit: restructure to the archetype layout (move `go.mod`/`go.sum` from
    `provider/` to root, delete `version.txt` and the monorepo `Makefile`;
    the version comes from the git tag and the ldflags path is

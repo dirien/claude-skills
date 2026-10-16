@@ -1,5 +1,9 @@
 import hashlib
+import io
+import json
 import unittest
+import urllib.error
+from unittest import mock
 
 import helpers
 import access_check
@@ -55,6 +59,113 @@ class AccessCheckTest(unittest.TestCase):
         self.assertFalse(res[2]["ok"])
         self.assertEqual(res[2]["status"], 404)
         self.assertEqual(res[3]["status"], "skipped")
+
+
+class CredentialDetectionTest(unittest.TestCase):
+    def test_print_commands_are_direct_and_shell_free(self):
+        import shlex
+        buf = io.StringIO()
+        access_check.print_commands("modal", "/tmp/probe", buf)
+        lines = buf.getvalue().splitlines()
+        cmds = [shlex.split(l) for l in lines if not l.startswith("#")]
+        self.assertEqual(len(cmds), 6)
+        self.assertEqual([c[:3] for c in cmds[:3]], [["gh", "api", "/repos/pulumi/autoregistry"],
+                                                      ["gh", "api", "/repos/pulumi/platform-providers-team"],
+                                                      ["gh", "api", "/repos/pulumi-labs/pulumi-modal"]])
+        for c in cmds[3:]:
+            self.assertEqual(c[:3], ["git", "-C", "/tmp/probe"])
+        self.assertEqual(cmds[3][3:], ["init", "-q"])
+        self.assertIn("--allow-empty", cmds[4])
+        self.assertEqual(cmds[5][3:], ["push", "--dry-run", "https://github.com/pulumi-labs/pulumi-modal.git", "HEAD:refs/heads/access-probe"])
+        for l in lines:
+            if not l.startswith("#"):
+                self.assertNotRegex(l, r"[|;&]|\bcd\b")
+        text = buf.getvalue()
+        self.assertIn("PASS rule", text)
+        self.assertIn("denied", text)
+        self.assertIn("403", text)
+
+    def test_print_commands_flag_runs_nothing(self):
+        with mock.patch.object(access_check, "run") as r, mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(access_check.main(["--print-commands", "--provider", "modal"]), 0)
+        r.assert_not_called()
+        self.assertIn("gh api /repos/pulumi-labs/pulumi-modal", out.getvalue())
+
+    def test_gh_login_message_exits_2(self):
+        def runner(cmd, cwd=None, env=None):
+            return 1, "To get started with GitHub CLI, please run:  gh auth login"
+        with self.assertRaises(access_check.CredentialsUnavailable):
+            access_check.run_probes("modal", runner)
+        cp = mock.Mock(returncode=1, stdout="", stderr="To get started with GitHub CLI, please run:  gh auth login")
+        with mock.patch.object(access_check.subprocess, "run", return_value=cp), mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(access_check.main(["--provider", "modal"]), 2)
+        self.assertIn("--print-commands", err.getvalue())
+        self.assertIn("credentials are not available to this process", err.getvalue())
+
+    def test_gh_rc4_exits_2(self):
+        with self.assertRaises(access_check.CredentialsUnavailable):
+            access_check.gh_get("/repos/x/y", lambda cmd, cwd=None, env=None: (4, ""))
+
+    def test_git_auth_error_is_credentials_not_denied(self):
+        def runner(cmd, cwd=None, env=None):
+            if cmd[:2] == ["gh", "api"]:
+                return 0, "HTTP/2.0 200 OK\r\n\r\n{\"has_issues\": true}"
+            if cmd[:2] == ["git", "push"]:
+                return 128, "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+            return 0, ""
+        with self.assertRaises(access_check.CredentialsUnavailable):
+            access_check.run_probes("modal", runner)
+
+    def test_permission_denied_is_still_plain_failure(self):
+        def runner(cmd, cwd=None, env=None):
+            if cmd[:2] == ["gh", "api"]:
+                return 0, "HTTP/2.0 200 OK\r\n\r\n{\"has_issues\": true}"
+            if cmd[:2] == ["git", "push"]:
+                return 128, "remote: Permission denied. fatal: unable to access: The requested URL returned error: 403"
+            return 0, ""
+        res = access_check.run_probes("modal", runner)
+        self.assertFalse(res[-1]["ok"])
+
+
+class DriftFetchTest(unittest.TestCase):
+    def test_urls(self):
+        self.assertEqual(archetype_drift.raw_url("o/r", ".github/x.yml", "main"),
+                         "https://raw.githubusercontent.com/o/r/main/.github/x.yml")
+        self.assertEqual(archetype_drift.tree_url("o/r", "main"), "https://api.github.com/repos/o/r/git/trees/main?recursive=1")
+
+    def test_main_with_injected_fetcher_no_drift(self):
+        m = render.load_manifest()
+        seen = []
+
+        def fetcher(url):
+            seen.append(url)
+            if "api.github.com" in url:
+                return json.dumps({"sha": "abc", "tree": []}).encode()
+            return b"same"
+        real = render.load_manifest
+        fake = dict(m, files=[dict(e, upstream_sha256=hashlib.sha256(b"same").hexdigest()) for e in m["files"]])
+        with mock.patch.object(render, "load_manifest", lambda: fake), mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(archetype_drift.main([], fetcher), 0)
+        self.assertTrue(any(u.startswith("https://raw.githubusercontent.com/") for u in seen))
+        self.assertTrue(real)
+
+    def test_rate_limit_message(self):
+        hdrs = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1760000000"}
+        err = urllib.error.HTTPError("https://api.github.com/x", 403, "rate limited", hdrs, None)
+        with mock.patch("urllib.request.urlopen", side_effect=err):
+            with self.assertRaises(archetype_drift.DriftError) as cm:
+                archetype_drift.http_get("https://api.github.com/x")
+        self.assertIn("rate limit", str(cm.exception))
+
+    def test_main_reports_fetch_error_exit_1(self):
+        def fetcher(url):
+            raise archetype_drift.DriftError("boom")
+        with mock.patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(archetype_drift.main([], fetcher), 1)
+
+    def test_no_gh_dependency(self):
+        import inspect
+        self.assertNotIn("subprocess", inspect.getsource(archetype_drift))
 
 
 class DriftTest(unittest.TestCase):

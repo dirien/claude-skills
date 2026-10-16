@@ -5,6 +5,17 @@
 
 Needs `gh` and `git` on PATH. Prints each probe's endpoint and status and
 never prints tokens or environment variables. Exits 1 if any probe fails.
+Exits 2 when this process has no GitHub credentials (see below).
+
+    python3 scripts/access_check.py --print-commands --provider modal
+
+Some runtimes inject GitHub credentials only into a `gh` or `git` that is
+invoked directly as the command, not into one started as a child of python
+or a shell. Then the probes above cannot work from this script (exit 2).
+`--print-commands` prints the same probes as one direct command per line
+(no pipes, no cd) so the agent can run each line itself. Lines starting
+with `#` are comments. PASS rule: every command exits 0, and the push
+probe output contains no "denied" or "403".
 
 Why push is probed with git and not with the REST `permissions` object: for
 the Workprentice GitHub App installation token, `permissions` reads all
@@ -19,6 +30,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -28,6 +40,55 @@ import names  # noqa: E402
 
 TOKEN_RE = re.compile(r"(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})")
 URL_CRED_RE = re.compile(r"(://)[^/@\s]+@")
+
+
+EXIT_NO_CREDENTIALS = 2
+NO_CREDENTIALS_HINT = ("credentials are not available to this process; run the probes directly with "
+                       "`python3 scripts/access_check.py --print-commands --provider <provider>` "
+                       "(each printed line as its own command, not via a shell or script)")
+GIT_AUTH_MARKERS = ("could not read username", "could not read password", "authentication failed",
+                    "terminal prompts disabled", "no such device or address")
+
+
+class CredentialsUnavailable(RuntimeError):
+    """A gh or git child process had no GitHub credentials."""
+
+
+def gh_needs_login(rc, out):
+    """True if gh output shows it has no credentials (rc=4 or the auth login message)."""
+    return rc == 4 or "gh auth login" in out
+
+
+def git_auth_failed(out):
+    """True if git output shows a missing-credentials failure (not a permission denial)."""
+    low = out.lower()
+    return any(m in low for m in GIT_AUTH_MARKERS)
+
+
+def probe_commands(provider, tmpdir):
+    """Return the probe commands as argv lists, each runnable as one direct binary invocation."""
+    n = names.derive(provider)
+    url = n["repo_url"] + ".git"
+    return [
+        ["gh", "api", "/repos/pulumi/autoregistry"],
+        ["gh", "api", "/repos/pulumi/platform-providers-team"],
+        ["gh", "api", "/repos/pulumi-labs/pulumi-" + provider],
+        ["git", "-C", tmpdir, "init", "-q"],
+        ["git", "-C", tmpdir, "-c", "user.name=access-probe", "-c", "user.email=access-probe@invalid.example",
+         "commit", "--allow-empty", "-q", "-m", "access probe"],
+        ["git", "-C", tmpdir, "push", "--dry-run", url, "HEAD:refs/heads/access-probe"],
+    ]
+
+
+def print_commands(provider, tmpdir=None, out=None):
+    """Print the probe commands, one per line, plus the PASS rule as # comments."""
+    out = out or sys.stdout
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="access-probe-")
+    print("# Run each non-comment line below as its own command (a direct gh or git invocation, not via a shell or script).", file=out)
+    for c in probe_commands(provider, tmpdir):
+        print(shlex.join(c), file=out)
+    print("# PASS rule: every command exits 0, and the push probe output contains no \"denied\" or \"403\".", file=out)
+    print("# Read the three gh api responses: the ticket repo must have has_issues true and archived false.", file=out)
 
 
 def redact(text):
@@ -57,6 +118,8 @@ def parse_http(output):
 def gh_get(endpoint, runner=run):
     """GET endpoint with gh; return (status, parsed JSON body or {})."""
     rc, out = runner(["gh", "api", "-i", endpoint])
+    if gh_needs_login(rc, out):
+        raise CredentialsUnavailable("gh api %s: no GitHub credentials (rc=%s)" % (endpoint, rc))
     status, body = parse_http(out)
     if status is None:
         raise RuntimeError("no HTTP status from gh api %s (rc=%s): %s" % (endpoint, rc, redact(out.strip()[:200])))
@@ -78,8 +141,12 @@ def probe_push(repo_url, runner=run):
         for s in steps:
             rc, out = runner(s, cwd=d, env=env)
             if rc != 0:
+                if git_auth_failed(out):
+                    raise CredentialsUnavailable("git: " + redact(out.strip()[:200]))
                 return False, "local setup failed: " + redact(out.strip()[:200])
         rc, out = runner(["git", "push", "--dry-run", repo_url, "HEAD:refs/heads/access-probe"], cwd=d, env=env)
+    if rc != 0 and git_auth_failed(out):
+        raise CredentialsUnavailable("git push: " + redact(out.strip()[-200:]))
     return rc == 0, "" if rc == 0 else redact(out.strip()[-300:])
 
 
@@ -132,10 +199,19 @@ def run_probes(provider, runner=run):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--provider", required=True, help="provider slug, e.g. modal")
+    ap.add_argument("--print-commands", action="store_true",
+                    help="print the probes as direct commands, one per line, instead of running them")
     args = ap.parse_args(argv)
     try:
         names.validate_slug(args.provider)
+        if args.print_commands:
+            print_commands(args.provider)
+            return 0
         results = run_probes(args.provider)
+    except CredentialsUnavailable as e:
+        print("error: %s" % e, file=sys.stderr)
+        print("HINT: " + NO_CREDENTIALS_HINT, file=sys.stderr)
+        return EXIT_NO_CREDENTIALS
     except (names.SlugError, RuntimeError) as e:
         print("error: %s" % e, file=sys.stderr)
         return 1
