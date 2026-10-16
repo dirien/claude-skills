@@ -18,6 +18,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gomod as gomodlib  # noqa: E402
 import names  # noqa: E402
 import render  # noqa: E402
 
@@ -210,6 +211,20 @@ def check_repo(repo):
         fails.append("MISSING generated SDK file %s (regenerate with `make dotnet_sdk`; schema csharp.rootNamespace must be Pulumi.Labs)" % n["dotnet_csproj"])
     if not os.path.isdir(os.path.join(repo, n["go_sdk_dir"])):
         fails.append("MISSING generated SDK dir %s/ (regenerate with `make go_sdk`; schema go.importBasePath must end in /sdk/go/%s)" % (n["go_sdk_dir"], n["go_pkg"]))
+
+    # 6b. Positive Go module paths: the SDK module and every example/template go.mod.
+    sdk_gomod = os.path.join(repo, n["go_sdk_dir"], "go.mod")
+    if os.path.isdir(os.path.join(repo, n["go_sdk_dir"])):
+        if not os.path.exists(sdk_gomod):
+            fails.append("MISSING %s/go.mod (make go_sdk runs `go mod init %s`)" % (n["go_sdk_dir"], n["go_import_base_path"]))
+        else:
+            with open(sdk_gomod, encoding="utf-8", errors="replace") as f:
+                for msg in gomodlib.check_sdk_gomod(f.read(), n["go_import_base_path"]):
+                    fails.append("WRONG %s/go.mod: %s" % (n["go_sdk_dir"], msg))
+    for rel in gomodlib.go_example_modules(repo):
+        with open(os.path.join(repo, rel, "go.mod"), encoding="utf-8", errors="replace") as f:
+            for msg in gomodlib.check_example_gomod(f.read(), n["go_import_base_path"], n["go_pkg"]):
+                fails.append("WRONG %s/go.mod: %s" % (rel, msg))
 
     # 7. Namespace grep and leftover placeholders over tracked files.
     pats = namespace_patterns(slug)

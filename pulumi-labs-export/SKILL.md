@@ -1,6 +1,6 @@
 ---
 name: pulumi-labs-export
-description: Move a provider out of the private pulumi/autoregistry monorepo (lib/providers/<provider>/) into a public pulumi-labs/pulumi-<provider> repo and keep it publishing. Use when asked to export, carve out, publish, release or onboard an autoregistry provider to pulumi-labs, to run the pre-push/pre-release gate on such a repo, or to file the npm/PyPI/NuGet/Maven/ESC onboarding issues for one. Covers fixed package naming, the access check, vendored archetype scaffolding rendered by script (never hand-copied), the verification gate, secret scan, and the experimental 0.x.y rules.
+description: Move a provider out of the private pulumi/autoregistry monorepo (lib/providers/<provider>/) into a public pulumi-labs/pulumi-<provider> repo and keep it publishing. Use when asked to export, carve out, publish, release or onboard an autoregistry provider to pulumi-labs, to run the pre-push/pre-release gate on such a repo, or to file the npm/PyPI/NuGet/Maven/ESC onboarding issues for one. Covers fixed package naming, the access check, vendored archetype scaffolding rendered by script (never hand-copied), the verification gate (builds all five SDKs, default-provider and credential checks, nothing is pushed without a passing report), secret scan, and the experimental 0.x.y rules.
 ---
 
 # Autoregistry Publisher: pulumi-labs export
@@ -81,8 +81,11 @@ python3 scripts/bootstrap.py
 
 Then run the `export PATH=...` line it prints (or
 `eval "$(python3 scripts/bootstrap.py)"`). It installs Go, the Pulumi CLI,
-`jq`, `gitleaks` and `make` under `$HOME/.local/pulumi-labs-export/` with
-no root and no compiler, and skips what is already current. If it exits
+`jq`, `gitleaks`, `make`, Node.js 22, the .NET 8 SDK, Temurin JDK 17 and
+Gradle 9 under `$HOME/.local/pulumi-labs-export/` with no root and no
+compiler, and skips what is already current. The eval line also exports
+`JAVA_HOME`, `DOTNET_ROOT` and the dotnet opt-outs. `--profile minimal`
+skips the last four tools (the verify gate then fails on them). If it exits
 non-zero, stop and report the message. `--check` reports without
 downloading. See `references/toolchain.md`.
 
@@ -151,10 +154,13 @@ go to a human, they are never merged silently. See `references/archetype.md`.
 
 ## Export procedure
 
-1. Audit on fresh `main` (never a stale clone). In
-   `lib/providers/<provider>/`: confirm it builds, vets and generates all
-   SDKs with no imports of other autoregistry packages. List every
-   namespace hit with file and line. Repo level CI in autoregistry does
+1. Audit on fresh `main` (never a stale clone). Run
+   `python3 scripts/verify.py --monorepo <autoregistry checkout> --provider <provider>`
+   and **stop if it fails**: it builds, vets and tests the provider, generates
+   and builds all five SDKs, and runs the default-provider and credential
+   checks. Failures are fixed in the monorepo (PR to `pulumi/autoregistry`),
+   never patched in the external repo. Then confirm no imports of other
+   autoregistry packages, and list every namespace hit with file and line. Repo level CI in autoregistry does
    not come along; plan for it. Check that `GOOS=windows go build` works;
    if not, you will pass `--exclude-platform` with a reason in step 5.
 2. `git subtree split --prefix=lib/providers/<provider>` to keep history,
@@ -175,18 +181,39 @@ go to a human, they are never merged silently. See `references/archetype.md`.
    description, schema `description`, `language.nodejs.packageDescription`).
    Version stays `0.x.y`. Then `make schema` and `make sdks VERSION=<0.x.y>`
    and commit the regenerated schema and `sdk/`.
-7. Gate. All three must pass before the first push:
-   - `python3 scripts/check.py --repo <repo>` (hard gate, see below).
+7. Gate. All of these must pass before the first push:
+   - `python3 scripts/verify.py --repo <repo>` on the exact commit to push
+     (full build gate, includes `check.py`; see "Before every push").
    - Secret scan of the split history. The monorepo is private and the
      target is public, so every historic commit becomes public. Use
      `gitleaks git --redact <repo>` if gitleaks is installed. If it is not,
      say "history was not scanned for secrets" and stop for a human; do not
      push. Any finding also stops for a human.
    - Onboarding issues filed (below).
-8. Push once the workflows are in place and the gate is clean. Do not tag a
+8. Run `python3 scripts/verify.py --assert-pushable --repo <repo>` immediately
+   before the push. Push once it exits 0 and the workflows are in place. Do not tag a
    release until every onboarding issue is closed.
 
-`check.py` is the gate: run it before every push and before every release.
+## Before every push (initial import and every later PR branch)
+
+Nothing goes to the external repo unless `verify.py` passed on the exact commit:
+
+```
+python3 scripts/verify.py --repo <repo>                    # whole gate, writes the report, exit 0 only if all pass
+python3 scripts/verify.py --assert-pushable --repo <repo>  # run immediately before git push
+```
+
+Any new commit (even a one-line fix) needs a fresh `verify.py` run. The gate
+proves: SDK generation works for all five languages with no codegen or
+`go mod tidy` errors; the Go SDK, every Go example and template compile against
+the local SDK; the Go module paths are the pulumi-labs ones; every SDK builds
+(a missing toolchain is a FAIL, never a skip); and the provider follows the
+default-provider pattern (works with no `Provider` resource, credentials from
+environment variables or per-resource attributes). If a step fails, fix the
+cause and re-run; never edit the gate or push around it. `references/verify.md`
+documents every check and why.
+
+`check.py` is the structural part of the gate and runs inside it.
 It reports all failures and exits 1 on any: required files present; archetype
 files byte-identical to what render.py produces (no hand edits); no
 `provider/go.mod`, `version.txt` or nested `go.mod`; root module name; schema
@@ -221,7 +248,8 @@ Go needs no issue. See `references/onboarding.md`.
 
 ## Each later release
 
-Run `python3 scripts/check.py --repo <repo>` before publishing. Any
+Run `python3 scripts/verify.py --repo <repo>` on the release commit before
+publishing, then `--assert-pushable` before the push or tag. Any
 `pulumi/autoregistry` or `pulumi/pulumi-<provider>` reference is a release
 blocker. If check.py says the archetype changed (the SHA recorded in
 `.pulumi-labs-export.json` differs from the vendored one), re-run

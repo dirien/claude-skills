@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import stat
 import tarfile
@@ -78,6 +79,128 @@ class PinTest(unittest.TestCase):
             self.skipTest("not inside pulumi/autoregistry")
         with open(path) as f:
             self.assertEqual(f.read().strip(), bootstrap.GO_VERSION)
+
+
+class ExtraToolPinTest(helpers.TempDirMixin, unittest.TestCase):
+    def test_node_urls(self):
+        s = bootstrap.tool_specs("amd64", "3.241.0")["node"]
+        self.assertEqual(s.url, "https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.gz")
+        self.assertEqual(s.checksums_url, "https://nodejs.org/dist/v22.23.3/SHASUMS256.txt")
+        self.assertEqual(s.version_token, "v22.23.3")
+        a = bootstrap.tool_specs("arm64", "3.241.0")["node"]
+        self.assertTrue(a.url.endswith("node-v22.23.3-linux-arm64.tar.gz"))
+
+    def test_dotnet_urls_and_sha512(self):
+        s = bootstrap.tool_specs("amd64", "3.241.0")["dotnet"]
+        self.assertEqual(s.url, "https://builds.dotnet.microsoft.com/dotnet/Sdk/8.0.426/dotnet-sdk-8.0.426-linux-x64.tar.gz")
+        self.assertEqual(s.checksums_url, "https://builds.dotnet.microsoft.com/dotnet/release-metadata/8.0/releases.json")
+        self.assertEqual((s.hash_algo, s.checksums_style), ("sha512", "dotnet"))
+        self.assertTrue(bootstrap.tool_specs("arm64", "3.241.0")["dotnet"].url.endswith("linux-arm64.tar.gz"))
+
+    def test_temurin_urls(self):
+        s = bootstrap.tool_specs("amd64", "3.241.0")["java"]
+        self.assertEqual(s.url, "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/"
+                                "OpenJDK17U-jdk_x64_linux_hotspot_17.0.20.1_1.tar.gz")
+        self.assertEqual(s.checksums_url, s.url + ".sha256.txt")
+        a = bootstrap.tool_specs("arm64", "3.241.0")["java"]
+        self.assertIn("jdk_aarch64_linux_hotspot_17.0.20.1_1", a.url)
+        self.assertEqual(s.version_token, "17.0.20.1")
+
+    def test_gradle_urls(self):
+        s = bootstrap.tool_specs("amd64", "3.241.0")["gradle"]
+        self.assertEqual(s.url, "https://services.gradle.org/distributions/gradle-9.8.1-bin.zip")
+        self.assertEqual(s.checksums_url, s.url + ".sha256")
+        self.assertEqual((s.kind, s.checksums_style, s.strip), ("zip", "bare", 1))
+
+    def test_profiles(self):
+        self.assertEqual(bootstrap.PROFILES["minimal"], ["go", "pulumi", "jq", "gitleaks", "make"])
+        self.assertEqual(bootstrap.PROFILES["full"][-4:], ["node", "dotnet", "java", "gradle"])
+
+    def test_bare_hash(self):
+        self.assertEqual(bootstrap.parse_bare_hash("A" * 64 + "\n", "x"), "a" * 64)
+        self.assertEqual(bootstrap.parse_bare_hash("%s  f.zip\n" % ("b" * 64), "x"), "b" * 64)
+        with self.assertRaises(bootstrap.BootstrapError):
+            bootstrap.parse_bare_hash("abc", "x")
+        with self.assertRaises(bootstrap.BootstrapError):
+            bootstrap.parse_bare_hash("a" * 64, "x", "sha512")
+
+    def test_dotnet_releases_lookup(self):
+        h = "c" * 128
+        doc = {"releases": [{"sdk": {"files": [{"name": "x.tar.gz", "url": "https://h/Sdk/8.0.426/dotnet-sdk-8.0.426-linux-x64.tar.gz", "hash": h}]},
+                             "sdks": [{"files": [{"url": "https://h/other.tar.gz", "hash": "d" * 128}]}]}]}
+        self.assertEqual(bootstrap.dotnet_hash_from_releases(json.dumps(doc), "dotnet-sdk-8.0.426-linux-x64.tar.gz"), h)
+        with self.assertRaises(bootstrap.BootstrapError):
+            bootstrap.dotnet_hash_from_releases(json.dumps(doc), "missing.tar.gz")
+        with self.assertRaises(bootstrap.BootstrapError):
+            bootstrap.dotnet_hash_from_releases("not json", "x")
+        doc["releases"].append({"sdk": {"files": [{"url": "https://h/dotnet-sdk-8.0.426-linux-x64.tar.gz", "hash": "e" * 128}]}})
+        with self.assertRaises(bootstrap.BootstrapError):
+            bootstrap.dotnet_hash_from_releases(json.dumps(doc), "dotnet-sdk-8.0.426-linux-x64.tar.gz")
+
+    def test_expected_hash_dispatch(self):
+        specs = bootstrap.tool_specs("amd64", "3.241.0")
+        self.assertEqual(bootstrap.expected_hash(specs["node"], "%s  node-v22.23.3-linux-x64.tar.gz\n" % ("1" * 64)), "1" * 64)
+        self.assertEqual(bootstrap.expected_hash(specs["gradle"], "2" * 64), "2" * 64)
+
+    def test_sha512_verify(self):
+        p = os.path.join(self.tmp, "f")
+        with open(p, "wb") as f:
+            f.write(b"hi")
+        bootstrap.verify_hash(p, bootstrap.file_hash(p, "sha512"), "sha512")
+        with self.assertRaises(bootstrap.BootstrapError) as cm:
+            bootstrap.verify_hash(p, "0" * 128, "sha512")
+        self.assertIn("SHA-512 mismatch", str(cm.exception))
+
+    def test_zip_extract_strip_modes_and_traversal(self):
+        import zipfile
+        p = os.path.join(self.tmp, "g.zip")
+        with zipfile.ZipFile(p, "w") as zf:
+            zi = zipfile.ZipInfo("gradle-9/bin/gradle")
+            zi.external_attr = 0o755 << 16
+            zf.writestr(zi, "#!/bin/sh\n")
+            zf.writestr("gradle-9/lib/a.jar", "x")
+        dest = os.path.join(self.tmp, "d")
+        bootstrap.extract_zip(p, dest, 1)
+        self.assertTrue(os.access(os.path.join(dest, "bin", "gradle"), os.X_OK))
+        self.assertTrue(os.path.exists(os.path.join(dest, "lib", "a.jar")))
+        bad = os.path.join(self.tmp, "bad.zip")
+        with zipfile.ZipFile(bad, "w") as zf:
+            zf.writestr("../evil", "x")
+        with self.assertRaises(bootstrap.BootstrapError):
+            bootstrap.extract_zip(bad, os.path.join(self.tmp, "e"))
+
+    def test_toolchain_env(self):
+        specs = bootstrap.tool_specs("amd64", "3.241.0")
+        prefix = os.path.join(self.tmp, "p")
+        self.assertEqual(bootstrap.toolchain_env(prefix, specs, icu=True), {})
+        os.makedirs(bootstrap.install_dir(prefix, specs["java"]))
+        os.makedirs(bootstrap.install_dir(prefix, specs["dotnet"]))
+        env = bootstrap.toolchain_env(prefix, specs, icu=False)
+        self.assertEqual(env["JAVA_HOME"], os.path.join(prefix, "opt", "temurin-17.0.20.1+1"))
+        self.assertEqual(env["DOTNET_ROOT"], os.path.join(prefix, "opt", "dotnet-8.0.426"))
+        self.assertEqual(env["DOTNET_CLI_TELEMETRY_OPTOUT"], "1")
+        self.assertEqual(env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"], "1")
+        self.assertNotIn("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", bootstrap.toolchain_env(prefix, specs, icu=True))
+        self.assertEqual(bootstrap.export_line("JAVA_HOME", "/a b/$x"), 'export JAVA_HOME="/a b/\\$x"')
+
+    def test_full_check_reports_new_tools_missing(self):
+        lines = []
+        ok = bootstrap.run_check(os.path.join(self.tmp, "p"), bootstrap.tool_specs("amd64", "3.241.0"), None, lines.append, "full")
+        self.assertFalse(ok)
+        for tool in ("node", "dotnet", "java", "gradle"):
+            self.assertTrue(any(l.startswith(tool) and "MISSING" in l for l in lines), tool)
+
+    def test_multi_line_version_token_and_proxy_banner(self):
+        exe = os.path.join(self.tmp, "j")
+        helpers.write(self.tmp, "j", '#!/bin/sh\necho "Picked up JAVA_TOOL_OPTIONS: -x" >&2\necho \'openjdk version "17.0.20.1" 2026\' >&2\n')
+        os.chmod(exe, 0o755)
+        line, err = bootstrap.run_version([exe, "-version"])
+        self.assertIsNone(err)
+        self.assertIn("17.0.20.1", line)
+        helpers.write(self.tmp, "g", "#!/bin/sh\necho ------\necho 'Gradle 9.8.1'\n")
+        os.chmod(os.path.join(self.tmp, "g"), 0o755)
+        line, err = bootstrap.run_version([os.path.join(self.tmp, "g")], None, "9.8.1")
+        self.assertEqual(line, "Gradle 9.8.1")
 
 
 class PulumiVersionTest(helpers.TempDirMixin, unittest.TestCase):

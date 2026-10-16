@@ -2,11 +2,14 @@
 """Install the pinned toolchain the pulumi-labs-export procedure needs.
 
 Installs Go, the Pulumi CLI (with its bundled language hosts), jq, gitleaks
-and GNU make into $HOME/.local/pulumi-labs-export/ and keeps symlinks in
+and GNU make (profile "minimal") plus Node.js 22 LTS, the .NET 8 SDK, Temurin
+JDK 17 and Gradle 9 (profile "full", the default, needed by verify.py to build
+every SDK) into $HOME/.local/pulumi-labs-export/ and keeps symlinks in
 <prefix>/bin. No compiler, no root, Python 3.8+ standard library only.
 
-On success stdout is one line to eval, followed by '#' comment lines with
-each tool's version; progress goes to stderr:
+On success stdout is the lines to eval (the PATH line, then the extra exports
+JAVA_HOME, DOTNET_ROOT and friends), followed by '#' comment lines with each
+tool's version; progress goes to stderr:
 
     eval "$(python3 scripts/bootstrap.py)"      # or copy the export line
 
@@ -18,6 +21,8 @@ import argparse
 import dataclasses
 import hashlib
 import io
+import glob
+import json
 import os
 import platform
 import posixpath
@@ -25,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import stat
 import tarfile
 import tempfile
 import time
@@ -32,6 +38,7 @@ from typing import Optional
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -55,7 +62,19 @@ MAKE_DEB_SHA256 = {
 }
 MAKE_DEB_URL = "https://deb.debian.org/debian/pool/main/m/make-dfsg/make_%s_%s.deb"
 
-TOOL_ORDER = ["go", "pulumi", "jq", "gitleaks", "make"]
+# Full profile: pinned like the archetype CI (node 20 / python 3.11 / dotnet 8 /
+# temurin 17 + gradle) but on current maintained releases. Hashes are read from
+# the checksum file published next to each release (Node SHASUMS256.txt,
+# .NET releases.json sha512, Temurin <asset>.sha256.txt, Gradle <asset>.sha256).
+NODE_VERSION = "22.23.3"          # Node.js 22 "Jod" LTS
+DOTNET_SDK_VERSION = "8.0.426"    # .NET SDK 8.0 (net6.0 projects build via the auto-downloaded targeting pack)
+TEMURIN_VERSION = "17.0.20.1+1"   # release tag jdk-17.0.20.1+1
+GRADLE_VERSION = "9.8.1"          # Gradle 9.x needs JVM 17+
+
+CORE_TOOLS = ["go", "pulumi", "jq", "gitleaks", "make"]
+EXTRA_TOOLS = ["node", "dotnet", "java", "gradle"]
+TOOL_ORDER = CORE_TOOLS + EXTRA_TOOLS
+PROFILES = {"minimal": CORE_TOOLS, "full": TOOL_ORDER}
 
 
 class BootstrapError(Exception):
@@ -72,7 +91,9 @@ class Spec:
     filename: str
     sha256: Optional[str] = None          # pinned hash, or None to use checksums_url
     checksums_url: Optional[str] = None   # upstream checksum file listing filename
-    kind: str = "tar"           # "tar" or "binary"
+    kind: str = "tar"           # "tar", "zip" or "binary"
+    hash_algo: str = "sha256"   # algorithm of the published checksum
+    checksums_style: str = "sums"   # "sums" (sha256sum text), "bare" (just the hash) or "dotnet" (releases.json)
     strip: int = 0              # leading path components to drop when unpacking
     links: object = None        # list of (link name, path in install dir) or "executables"
     exe: Optional[str] = None             # executable (in <prefix>/bin) used to probe the version
@@ -116,6 +137,19 @@ def tool_specs(arch, pulumi_version):
     pu_rel = "https://github.com/pulumi/pulumi/releases/download/v%s/" % pulumi_version
     jq_rel = "https://github.com/jqlang/jq/releases/download/jq-%s/" % JQ_VERSION
     gl_rel = "https://github.com/gitleaks/gitleaks/releases/download/v%s/" % GITLEAKS_VERSION
+    nx = "x64" if arch == "amd64" else "arm64"
+    tx = "x64" if arch == "amd64" else "aarch64"
+    node_file = "node-v%s-linux-%s.tar.gz" % (NODE_VERSION, nx)
+    node_rel = "https://nodejs.org/dist/v%s/" % NODE_VERSION
+    dn_file = "dotnet-sdk-%s-linux-%s.tar.gz" % (DOTNET_SDK_VERSION, nx)
+    dn_chan = ".".join(DOTNET_SDK_VERSION.split(".")[:2])
+    tem_ver = TEMURIN_VERSION.split("+")[0]
+    tem_major = tem_ver.split(".")[0]
+    tem_file = "OpenJDK%sU-jdk_%s_linux_hotspot_%s.tar.gz" % (tem_major, tx, TEMURIN_VERSION.replace("+", "_"))
+    tem_url = "https://github.com/adoptium/temurin%s-binaries/releases/download/jdk-%s/%s" % (
+        tem_major, TEMURIN_VERSION.replace("+", "%2B"), tem_file)
+    gr_file = "gradle-%s-bin.zip" % GRADLE_VERSION
+    gr_url = "https://services.gradle.org/distributions/" + gr_file
     return {
         "go": Spec("go", GO_VERSION, "https://go.dev/dl/" + go_file, go_file,
                    sha256=GO_SHA256[arch], strip=1,
@@ -133,6 +167,24 @@ def tool_specs(arch, pulumi_version):
                          checksums_url=gl_rel + "gitleaks_%s_checksums.txt" % GITLEAKS_VERSION,
                          links=[("gitleaks", "gitleaks")],
                          exe="gitleaks", version_cmd=("version",), version_token=GITLEAKS_VERSION),
+        "node": Spec("node", NODE_VERSION, node_rel + node_file, node_file,
+                     checksums_url=node_rel + "SHASUMS256.txt", strip=1,
+                     links=[("node", "bin/node"), ("npm", "bin/npm"), ("npx", "bin/npx")],
+                     exe="node", version_cmd=("--version",), version_token="v" + NODE_VERSION),
+        "dotnet": Spec("dotnet", DOTNET_SDK_VERSION,
+                       "https://builds.dotnet.microsoft.com/dotnet/Sdk/%s/%s" % (DOTNET_SDK_VERSION, dn_file), dn_file,
+                       checksums_url="https://builds.dotnet.microsoft.com/dotnet/release-metadata/%s/releases.json" % dn_chan,
+                       checksums_style="dotnet", hash_algo="sha512",
+                       links=[("dotnet", "dotnet")],
+                       exe="dotnet", version_cmd=("--version",), version_token=DOTNET_SDK_VERSION),
+        "java": Spec("temurin", TEMURIN_VERSION, tem_url, tem_file,
+                     checksums_url=tem_url + ".sha256.txt", strip=1,
+                     links=[("java", "bin/java"), ("javac", "bin/javac"), ("jar", "bin/jar")],
+                     exe="java", version_cmd=("-version",), version_token=tem_ver),
+        "gradle": Spec("gradle", GRADLE_VERSION, gr_url, gr_file,
+                       checksums_url=gr_url + ".sha256", checksums_style="bare",
+                       kind="zip", strip=1, links=[("gradle", "bin/gradle")],
+                       exe="gradle", version_cmd=("--version",), version_token=GRADLE_VERSION),
     }
 
 
@@ -155,13 +207,27 @@ def parse_checksums(text):
     return out
 
 
-def sha256_file(path):
-    """Return the hex SHA-256 of a file."""
-    h = hashlib.sha256()
+def file_hash(path, algo="sha256"):
+    """Return the hex digest of a file for algo ('sha256' or 'sha512')."""
+    h = hashlib.new(algo)
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def sha256_file(path):
+    """Return the hex SHA-256 of a file."""
+    return file_hash(path, "sha256")
+
+
+def verify_hash(path, expected, algo="sha256", label=None):
+    """Raise BootstrapError unless path hashes to expected under algo."""
+    actual = file_hash(path, algo)
+    if actual != expected.lower():
+        raise BootstrapError("%s mismatch for %s: expected %s, got %s"
+                             % (algo.upper().replace("SHA", "SHA-"), label or os.path.basename(path),
+                                expected.lower(), actual))
 
 
 def verify_sha256(path, expected, label=None):
@@ -170,6 +236,56 @@ def verify_sha256(path, expected, label=None):
     if actual != expected.lower():
         raise BootstrapError("SHA-256 mismatch for %s: expected %s, got %s"
                              % (label or os.path.basename(path), expected.lower(), actual))
+
+
+def parse_bare_hash(text, source, algo="sha256"):
+    """Return the hash from a file holding just '<hex>' (optionally '<hex>  name')."""
+    want = {"sha256": 64, "sha512": 128}[algo]
+    m = re.match(r"^\s*([0-9a-fA-F]+)\b", text)
+    if not m or len(m.group(1)) != want:
+        raise BootstrapError("%s does not start with a %d-digit %s hash" % (source, want, algo.upper()))
+    return m.group(1).lower()
+
+
+def dotnet_hash_from_releases(text, filename, source="releases.json"):
+    """Return the sha512 of filename from a .NET releases.json document.
+
+    Walks the whole document for file entries whose url ends in filename; all
+    matches must agree, otherwise BootstrapError.
+    """
+    try:
+        doc = json.loads(text)
+    except ValueError as e:
+        raise BootstrapError("%s is not valid JSON: %s" % (source, e))
+    found = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            url, h = node.get("url"), node.get("hash")
+            if isinstance(url, str) and isinstance(h, str) and url.rsplit("/", 1)[-1] == filename \
+                    and re.fullmatch(r"[0-9a-fA-F]{128}", h):
+                found.add(h.lower())
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(doc)
+    if not found:
+        raise BootstrapError("%s has no sha512 entry for %s" % (source, filename))
+    if len(found) > 1:
+        raise BootstrapError("%s lists conflicting sha512 values for %s" % (source, filename))
+    return found.pop()
+
+
+def expected_hash(spec, text):
+    """Return the expected hex digest for spec from its checksum file text."""
+    if spec.checksums_style == "bare":
+        return parse_bare_hash(text, spec.checksums_url, spec.hash_algo)
+    if spec.checksums_style == "dotnet":
+        return dotnet_hash_from_releases(text, spec.filename, spec.checksums_url)
+    return expected_from_checksums(text, spec.filename, spec.checksums_url)
 
 
 def expected_from_checksums(text, filename, source):
@@ -278,6 +394,31 @@ def extract_tar(fileobj_or_path, dest, strip=0):
                 raise BootstrapError("unsupported entry type in archive: %r" % m.name)
 
 
+def extract_zip(path, dest, strip=0):
+    """Safely extract a zip into dest, dropping `strip` leading components.
+
+    Restores the unix mode bits (zipfile does not) and rejects absolute paths,
+    '..' and symlinks.
+    """
+    os.makedirs(dest, exist_ok=True)
+    with zipfile.ZipFile(path) as zf:
+        for info in zf.infolist():
+            parts = _rel_parts(info.filename, strip)
+            if not parts:
+                continue
+            mode = (info.external_attr >> 16) & 0o177777
+            if stat.S_ISLNK(mode):
+                raise BootstrapError("unsupported symlink entry in zip: %r" % info.filename)
+            target = os.path.join(dest, *parts)
+            if info.is_dir():
+                os.makedirs(target, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out, 1 << 20)
+            os.chmod(target, ((mode & 0o777) or 0o644) | 0o200)
+
+
 # ---------------------------------------------------------------- ar / deb
 
 AR_MAGIC = b"!<arch>\n"
@@ -335,16 +476,22 @@ def deb_extract_file(deb_path, member, dest_path):
 
 # ------------------------------------------------------------------- state
 
-def run_version(cmd):
+def run_version(cmd, extra_env=None, token=None):
     """Run a version command; return (first output line, None) or (None, error)."""
+    env = dict(os.environ, PULUMI_SKIP_UPDATE_CHECK="true", PULUMI_AUTOMATION_API_SKIP_VERSION_CHECK="true")
+    env.update(extra_env or {})
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
-                           env=dict(os.environ, PULUMI_SKIP_UPDATE_CHECK="true", PULUMI_AUTOMATION_API_SKIP_VERSION_CHECK="true"))
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
     except (OSError, subprocess.SubprocessError) as e:
         return None, "cannot run %s: %s" % (cmd[0], getattr(e, "strerror", None) or e.__class__.__name__)
-    out = (p.stdout or p.stderr or "").strip().splitlines()
+    # The JVM announces JAVA_TOOL_OPTIONS (set by the sandbox proxy) on stderr first.
+    out = [l for l in (p.stdout or p.stderr or "").strip().splitlines() if not l.startswith("Picked up ")]
     if p.returncode != 0:
         return None, "%s exited %d: %s" % (os.path.basename(cmd[0]), p.returncode, _clean(out[0] if out else ""))
+    if token:
+        for line in out:
+            if token_in(token, line):
+                return line, None
     return (out[0] if out else ""), None
 
 
@@ -353,12 +500,40 @@ def token_in(token, line):
     return re.search(r"(?<![\w.])%s(?![\w])" % re.escape(token), line) is not None
 
 
-def check_spec(spec, prefix):
+def has_icu(patterns=None):
+    """True if an ICU library (needed by .NET unless globalization is invariant) is installed."""
+    pats = patterns if patterns is not None else [
+        "/usr/lib/libicuuc.so*", "/usr/lib/*-linux-gnu/libicuuc.so*", "/usr/lib64/libicuuc.so*",
+        "/lib/*-linux-gnu/libicuuc.so*", "/usr/local/lib/libicuuc.so*", "/usr/lib/*/libicuuc.so*"]
+    return any(glob.glob(p) for p in pats)
+
+
+def toolchain_env(prefix, specs, icu=None):
+    """Return the ordered {VAR: value} exports the full-profile tools need.
+
+    Only variables for tools that are unpacked under prefix are included:
+    JAVA_HOME, DOTNET_ROOT, DOTNET_CLI_TELEMETRY_OPTOUT, DOTNET_NOLOGO and, when
+    no libicu is installed, DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1.
+    """
+    env = {}
+    if "java" in specs and os.path.isdir(install_dir(prefix, specs["java"])):
+        env["JAVA_HOME"] = install_dir(prefix, specs["java"])
+    if "dotnet" in specs and os.path.isdir(install_dir(prefix, specs["dotnet"])):
+        env["DOTNET_ROOT"] = install_dir(prefix, specs["dotnet"])
+        env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
+        env["DOTNET_NOLOGO"] = "1"
+        if not (has_icu() if icu is None else icu):
+            env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
+    return env
+
+
+def check_spec(spec, prefix, specs=None):
     """Return (status, detail) for spec in prefix: 'ok', 'wrong' or 'missing'."""
     exe = os.path.join(prefix, "bin", spec.exe)
     if not os.path.exists(exe):
         return "missing", ""
-    line, err = run_version([exe] + list(spec.version_cmd))
+    line, err = run_version([exe] + list(spec.version_cmd), toolchain_env(prefix, specs or {spec.exe: spec}),
+                           spec.version_token)
     if err:
         return "wrong", err
     return ("ok" if token_in(spec.version_token, line) else "wrong"), line
@@ -442,16 +617,21 @@ def install_spec(spec, prefix, log):
             expected, source = spec.sha256, "pinned in bootstrap.py"
         else:
             text = fetch_text(spec.checksums_url, tmp)
-            expected = expected_from_checksums(text, spec.filename, spec.checksums_url)
+            expected = expected_hash(spec, text)
             source = spec.checksums_url
         download(spec.url, archive)
-        verify_sha256(archive, expected, spec.filename)
-        log("%s: SHA-256 ok (%s)" % (spec.filename, source))
+        verify_hash(archive, expected, spec.hash_algo, spec.filename)
+        log("%s: %s ok (%s)" % (spec.filename, spec.hash_algo.upper().replace("SHA", "SHA-"), source))
         stage = os.path.join(tmp, "stage")
         if spec.kind == "binary":
             os.makedirs(stage)
             shutil.copyfile(archive, os.path.join(stage, spec.links[0][1]))
             os.chmod(os.path.join(stage, spec.links[0][1]), 0o755)
+        elif spec.kind == "zip":
+            try:
+                extract_zip(archive, stage, spec.strip)
+            except (zipfile.BadZipFile, OSError, EOFError) as e:
+                raise BootstrapError("cannot unpack %s: %s" % (spec.filename, e))
         else:
             try:
                 extract_tar(archive, stage, spec.strip)
@@ -531,17 +711,22 @@ def path_line(prefix):
     return 'export PATH="%s:$PATH"' % esc
 
 
-def run_check(prefix, specs, only, out):
+def export_line(var, value):
+    """Return an eval-able `export VAR="value"` line with shell metacharacters escaped."""
+    return 'export %s="%s"' % (var, re.sub(r'(["\\$`])', r"\\\1", value))
+
+
+def run_check(prefix, specs, only, out, profile="minimal"):
     """Print what is installed without downloading; return True if everything is ok."""
     all_ok = True
-    for name in TOOL_ORDER:
+    for name in PROFILES[profile]:
         if only and name != only:
             continue
         if name == "make":
             status, detail, path = check_make(prefix)
             where = " (%s)" % path if path else ""
         else:
-            status, detail = check_spec(specs[name], prefix)
+            status, detail = check_spec(specs[name], prefix, specs)
             where = ""
             if status == "ok" or status == "wrong":
                 where = " (%s)" % os.path.join(prefix, "bin", specs[name].exe)
@@ -556,14 +741,18 @@ def main(argv=None, out=None, err=None):
     out = out or (lambda s: print(s, flush=True))
     err = err or (lambda s: print(s, file=sys.stderr, flush=True))
     ap = argparse.ArgumentParser(
-        description="Install the pinned toolchain (go, pulumi, jq, gitleaks, make) for the "
-                    "pulumi-labs-export procedure into $HOME/.local/pulumi-labs-export. "
-                    "On success stdout is an `export PATH=...` line to eval, then '# tool version' "
-                    "comment lines; progress goes to stderr.")
+        description="Install the pinned toolchain for the pulumi-labs-export procedure into "
+                    "$HOME/.local/pulumi-labs-export: go, pulumi, jq, gitleaks, make (profile minimal) "
+                    "plus node, dotnet, java, gradle (profile full, the default). "
+                    "On success stdout is an `export PATH=...` line to eval, the extra exports "
+                    "(JAVA_HOME, DOTNET_ROOT, ...), then '# tool version' comment lines; "
+                    "progress goes to stderr.")
     ap.add_argument("--check", action="store_true",
                     help="report what is installed and at which version; download nothing; "
                          "exit 1 if anything is missing or at the wrong version")
-    ap.add_argument("--only", choices=TOOL_ORDER, help="act on a single tool")
+    ap.add_argument("--only", choices=TOOL_ORDER, help="act on a single tool (overrides --profile)")
+    ap.add_argument("--profile", choices=sorted(PROFILES), default="full",
+                    help="minimal = go, pulumi, jq, gitleaks, make; full (default) adds node, dotnet, java, gradle")
     ap.add_argument("--prefix", default=None, help="install prefix (default: $HOME/.local/pulumi-labs-export)")
     args = ap.parse_args(argv)
     prefix = os.path.abspath(args.prefix or default_prefix())
@@ -576,10 +765,10 @@ def main(argv=None, out=None, err=None):
         err("bootstrap: error: %s" % e)
         return 1
     if args.check:
-        return 0 if run_check(prefix, specs, args.only, out) else 1
+        return 0 if run_check(prefix, specs, args.only, out, args.profile) else 1
 
     failures, report = [], []
-    for name in TOOL_ORDER:
+    for name in PROFILES[args.profile]:
         if args.only and name != args.only:
             continue
         try:
@@ -587,14 +776,14 @@ def main(argv=None, out=None, err=None):
                 report.append(("make", install_make(prefix, arch, err)))
                 continue
             spec = specs[name]
-            status, detail = check_spec(spec, prefix)
+            status, detail = check_spec(spec, prefix, specs)
             if status == "ok":
                 err("%s %s: already installed, skipping" % (name, spec.version))
                 if os.path.isdir(install_dir(prefix, spec)):
                     link_tool(spec, prefix, install_dir(prefix, spec))
             else:
                 install_spec(spec, prefix, err)
-                status, detail = check_spec(spec, prefix)
+                status, detail = check_spec(spec, prefix, specs)
                 if status != "ok":
                     raise BootstrapError("%s installed but its version check failed: %s" % (name, detail or "no output"))
             report.append((name, detail))
@@ -608,6 +797,8 @@ def main(argv=None, out=None, err=None):
             err("bootstrap: error: " + f)
         return 1
     out(path_line(prefix))
+    for var, val in toolchain_env(prefix, specs).items():
+        out(export_line(var, val))
     for name, ver in report:
         out("# %s: %s" % (name, ver))
     return 0

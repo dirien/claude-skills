@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import tempfile
 import subprocess
 import sys
 import tempfile
@@ -79,6 +80,7 @@ def build_repo(root, slug="modal", display="Modal"):
     write(repo, "provider/pkg/provider/provider.go", GO_HEADER + "package provider\n")
     write(repo, n["dotnet_csproj"], "<Project/>\n")
     write(repo, n["go_sdk_dir"] + "/doc.go", "package x\n")
+    write(repo, n["go_sdk_dir"] + "/go.mod", "module %s\n\ngo 1.27\n" % n["go_import_base_path"])
     for lang in ("java", "nodejs", "python"):
         write(repo, "sdk/%s/placeholder.txt" % lang, "x\n")
     commit_all(repo)
