@@ -297,7 +297,22 @@ EXPLICIT_PROVIDER_RES = {
 LANG_BY_EXT = {".ts": "js", ".tsx": "js", ".js": "js", ".mjs": "js", ".cjs": "js", ".py": "py",
                ".go": "go", ".cs": "cs", ".java": "java", ".yaml": "yaml", ".yml": "yaml"}
 EXAMPLE_SKIP_DIRS = gomod.SKIP_DIRS | {"sdk", "dist", "build", ".gradle", "target"}
-CRED_REQUIRE_RE = re.compile(r"\.[Rr]equire\w*\s*\(\s*(?:ctx\s*,\s*)?[\"']([^\"']+)[\"']")
+# Any config read: require*/get*/try* (TS, Python snake_case, Go, C#, Java) with a string key.
+CONFIG_READ_RE = re.compile(r"\.(?:[Rr]equire|[Gg]et|[Tt]ry)\w*\s*\(\s*(?:ctx\s*,\s*)?[\"']([^\"']+)[\"']")
+
+
+def norm_key(key):
+    """Normalise a config key for comparison: drop any `ns:` prefix, case, `_` and `-` (tokenId == token_id)."""
+    return re.sub(r"[^a-z0-9]", "", key.split(":")[-1].lower())
+
+
+def provider_credential_names(schema):
+    """Return the normalised names of the provider's own credential config variables.
+
+    Those are the schema's config.variables that are `secret: true` or credential-named.
+    """
+    variables = ((schema or {}).get("config") or {}).get("variables") or {}
+    return {norm_key(n) for n, v in variables.items() if (v or {}).get("secret") is True or CRED_RE.search(n)}
 
 
 def _is_comment(line):
@@ -319,16 +334,18 @@ def find_explicit_provider(ext, text):
     return hits
 
 
-def find_credential_requires(ext, text):
-    """Return [(lineno, key, line)] where a program requires a credential-named config key."""
-    if ext.lower() not in LANG_BY_EXT or LANG_BY_EXT[ext.lower()] == "yaml":
+def find_credential_requires(ext, text, cred_names):
+    """Return [(lineno, key, line)] where a program reads a config key naming one of the provider's own
+    credential variables (cred_names, see provider_credential_names). App secrets such as a token stored in
+    a Secret resource are not flagged."""
+    if not cred_names or ext.lower() not in LANG_BY_EXT or LANG_BY_EXT[ext.lower()] == "yaml":
         return []
     hits = []
     for i, line in enumerate(text.splitlines(), 1):
         if _is_comment(line):
             continue
-        for m in CRED_REQUIRE_RE.finditer(line):
-            if CRED_RE.search(m.group(1)):
+        for m in CONFIG_READ_RE.finditer(line):
+            if norm_key(m.group(1)) in cred_names:
                 hits.append((i, m.group(1), line.strip()[:200]))
     return hits
 
@@ -352,14 +369,14 @@ def iter_example_files(root):
                     continue
 
 
-def scan_examples(root):
-    """Return (explicit_provider_hits, credential_require_hits) as lists of strings."""
+def scan_examples(root, cred_names=()):
+    """Return (explicit_provider_hits, credential_read_hits) as lists of strings."""
     prov, cred = [], []
     for rel, ext, text in iter_example_files(root):
         for ln, line in find_explicit_provider(ext, text):
             prov.append("%s:%d: %s" % (rel, ln, line))
-        for ln, key, line in find_credential_requires(ext, text):
-            cred.append("%s:%d: requires credential-named config key %r: %s" % (rel, ln, key, line))
+        for ln, key, line in find_credential_requires(ext, text, cred_names):
+            cred.append("%s:%d: reads config key %r, a credential of the provider itself: %s" % (rel, ln, key, line))
     return prov, cred
 
 
@@ -382,13 +399,13 @@ def default_provider_steps(gate, schema, code_root, examples_root):
     step("dp_no_env_tags", "no env:\"...\" struct tags on pulumi fields (infer ignores them)",
          [{"name": t.split(":", 2)[0] + ":" + t.split(":", 2)[1], "status": "FAIL", "detail": t} for t in tags]
          or [{"name": "provider code", "status": "PASS", "detail": "no env struct tags"}])
-    prov, cred = scan_examples(examples_root)
+    prov, cred = scan_examples(examples_root, provider_credential_names(schema))
     step("dp_no_explicit_provider", "examples and templates use the default provider (no explicit Provider)",
          [{"name": h.split(":", 1)[0], "status": "FAIL", "detail": h} for h in prov]
          or [{"name": "examples+templates", "status": "PASS", "detail": "no explicit provider instantiation"}])
-    step("dp_no_credential_require", "examples and templates do not require credential config keys",
+    step("dp_no_credential_require", "examples and templates do not read the provider's own credential config keys",
          [{"name": h.split(":", 1)[0], "status": "FAIL", "detail": h} for h in cred]
-         or [{"name": "examples+templates", "status": "PASS", "detail": "no require of credential-named keys"}])
+         or [{"name": "examples+templates", "status": "PASS", "detail": "no read of the provider's credential config keys"}])
 
 
 # ------------------------------------------------------------ Go SDK helpers

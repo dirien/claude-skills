@@ -64,14 +64,12 @@ exports `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`. Gradle 9 runs on JDK 17; the
 | `dp_no_required_config` | `config.defaults` and `provider.requiredInputs` are empty | any required config breaks the "no Provider resource, just env vars" path |
 | `dp_no_env_tags` | no `env:"..."` tag on a `pulumi:"..."` struct field in non-test provider Go code (`shim/`, `sdk/`, `vendor/` skipped) | infer ignores `env` tags; use `a.SetDefault(&c.Field, nil, "ENV_VAR")` in `Annotate`. Mirrors the `native-provider-env-tags` workflow |
 | `dp_no_explicit_provider` | examples and templates never instantiate a provider: `new <x>.Provider(` (TS/JS), `<x>.Provider(` (Python), `.NewProvider(ctx` (Go), `new <X>.Provider(` or `new Provider(` (C#), `new Provider(` (Java), `pulumi:providers:` (YAML). Comment lines are ignored | examples must show the default-provider path |
-| `dp_no_credential_require` | no `config.require`/`requireSecret`/`RequireSecret`/`require_secret` of a credential-named key in examples and templates | credentials come from the environment or per-resource attributes, not stack config the user must set up |
+| `dp_no_credential_require` | examples and templates never read (`require*`, `get*`, `try*`, any case style) a config key matching one of the provider's own credential variables: the schema's `config.variables` that are `secret: true` or credential-named (modal: `tokenId`, `tokenSecret`), compared case-insensitively ignoring `_`, `-` and a `<ns>:` prefix | provider credentials come from the environment (or per-resource attributes), not stack config the user must set up. App secrets stored in a Secret resource (e.g. `hfToken`, `workerApiKey`) are not provider credentials and pass |
 
-Limits: the require check looks at code, not at `config:` blocks in
-`Pulumi.yaml`. A key such as `hfToken` that is an application secret, not a
-provider credential, still trips the name match; rename it or take a human
-decision, never weaken the check. `templates/` must follow the repo's template
+Limits: the credential check looks at code, not at `config:` blocks in
+`Pulumi.yaml`. `templates/` must follow the repo's template
 rules (project-namespace config keys) in AGENTS.md; if a template can only work
-with a credential `require`, stop and ask a human.
+with a read of a provider credential key, stop and ask a human.
 
 ## Positive Go module-path checks in `check.py`
 
