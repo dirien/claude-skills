@@ -191,6 +191,8 @@ def main(argv=None):
         if not display:
             raise RenderError("--display-name is required for the first render")
         options = make_options(provider, display, excludes)
+        for key, val in (prev or {}).items():  # keep what export.py recorded (source SHA, version, ...)
+            options.setdefault(key, val)
         report = write_repo(args.repo_dir, options)
     except RenderError as e:
         print("error: %s" % e, file=sys.stderr)

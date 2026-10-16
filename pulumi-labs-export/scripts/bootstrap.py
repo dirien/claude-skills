@@ -8,7 +8,7 @@ every SDK) into $HOME/.local/pulumi-labs-export/ and keeps symlinks in
 <prefix>/bin. No compiler, no root, Python 3.8+ standard library only.
 
 On success stdout is the lines to eval (the PATH line, then the extra exports
-JAVA_HOME, DOTNET_ROOT and friends), followed by '#' comment lines with each
+GRADLE_USER_HOME, JAVA_HOME, DOTNET_ROOT and friends), followed by '#' comment lines with each
 tool's version; progress goes to stderr:
 
     eval "$(python3 scripts/bootstrap.py)"      # or copy the export line
@@ -508,14 +508,21 @@ def has_icu(patterns=None):
     return any(glob.glob(p) for p in pats)
 
 
+def gradle_user_home(prefix):
+    """Return the Gradle user home used for every Gradle run: <prefix>/gradle-home."""
+    return os.path.join(prefix, "gradle-home")
+
+
 def toolchain_env(prefix, specs, icu=None):
     """Return the ordered {VAR: value} exports the full-profile tools need.
 
-    Only variables for tools that are unpacked under prefix are included:
-    JAVA_HOME, DOTNET_ROOT, DOTNET_CLI_TELEMETRY_OPTOUT, DOTNET_NOLOGO and, when
-    no libicu is installed, DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1.
+    GRADLE_USER_HOME=<prefix>/gradle-home is always included: in the agent runtime
+    ~/.gradle is not usable and Gradle fails without a writable user home. The other
+    variables are included only for tools unpacked under prefix: JAVA_HOME,
+    DOTNET_ROOT, DOTNET_CLI_TELEMETRY_OPTOUT, DOTNET_NOLOGO and, when no libicu is
+    installed, DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1.
     """
-    env = {}
+    env = {"GRADLE_USER_HOME": gradle_user_home(prefix)}
     if "java" in specs and os.path.isdir(install_dir(prefix, specs["java"])):
         env["JAVA_HOME"] = install_dir(prefix, specs["java"])
     if "dotnet" in specs and os.path.isdir(install_dir(prefix, specs["dotnet"])):
@@ -767,6 +774,11 @@ def main(argv=None, out=None, err=None):
     if args.check:
         return 0 if run_check(prefix, specs, args.only, out, args.profile) else 1
 
+    try:
+        os.makedirs(gradle_user_home(prefix), exist_ok=True)
+    except OSError as e:
+        err("bootstrap: error: cannot create %s: %s" % (gradle_user_home(prefix), e.strerror or e.__class__.__name__))
+        return 1
     failures, report = [], []
     for name in PROFILES[args.profile]:
         if args.only and name != args.only:

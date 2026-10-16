@@ -17,7 +17,9 @@ python3 scripts/bootstrap.py --profile minimal  # skip node, dotnet, java, gradl
 ```
 
 Each shell session needs the PATH line (`export PATH="<prefix>/bin:$PATH"`) and
-the extra exports that follow it (`JAVA_HOME`, `DOTNET_ROOT`,
+the extra exports that follow it (`GRADLE_USER_HOME=<prefix>/gradle-home`,
+always set, because `~/.gradle` is not usable in the agent runtime and Gradle
+fails without it; `JAVA_HOME`, `DOTNET_ROOT`,
 `DOTNET_CLI_TELEMETRY_OPTOUT=1`, `DOTNET_NOLOGO=1`, and
 `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` only when no libicu is installed):
 stdout carries those lines first, then `# tool: version` comments; progress is
