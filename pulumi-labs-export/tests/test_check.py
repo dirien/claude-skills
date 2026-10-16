@@ -65,6 +65,30 @@ class FailTest(CheckBase):
         os.remove(os.path.join(self.repo, "sdk/java/placeholder.txt"))
         self.assertFails(r"required directory: sdk/java/")
 
+    def test_sdk_gomod_wrong_module(self):
+        helpers.write(self.repo, self.n["go_sdk_dir"] + "/go.mod", "module github.com/pulumi/pulumi-modal/sdk/go/modal\n\ngo 1.27\n")
+        self.assertFails(r"WRONG sdk/go/modal/go.mod: sdk go.mod declares module")
+
+    def test_sdk_gomod_missing(self):
+        os.remove(os.path.join(self.repo, self.n["go_sdk_dir"], "go.mod"))
+        self.assertFails(r"MISSING sdk/go/modal/go.mod")
+
+    def test_example_requires_wrong_sdk_path(self):
+        helpers.write(self.repo, "examples/modal-go/go.mod",
+                      "module example\n\nrequire github.com/pulumi/pulumi-modal/sdk/go/modal v0.1.0\n")
+        self.assertFails(r"examples/modal-go/go.mod: requires github.com/pulumi/pulumi-modal/sdk/go/modal, want exactly github.com/pulumi-labs/pulumi-modal/sdk/go/modal")
+
+    def test_example_with_right_path_passes(self):
+        helpers.write(self.repo, "templates/modal-cloud-go/go.mod",
+                      "module ${PROJECT}\n\nrequire (\n\tgithub.com/pulumi-labs/pulumi-modal/sdk/go/modal v0.1.0\n)\n")
+        self.assertEqual(self.run_check(), [])
+
+    def test_example_replace_elsewhere_fails(self):
+        helpers.write(self.repo, "examples/modal-go/go.mod",
+                      "module example\n\nrequire github.com/pulumi-labs/pulumi-modal/sdk/go/modal v0.1.0\n"
+                      "replace github.com/pulumi-labs/pulumi-modal/sdk/go/modal => /home/me/fork\n")
+        self.assertFails(r"examples/modal-go/go.mod: replace .* is not allowed")
+
     def test_hand_edited_makefile(self):
         self.edit("Makefile", lambda s: s + "\nextra:\n\techo hi\n")
         self.assertFails(r"HAND-EDITED Makefile")
