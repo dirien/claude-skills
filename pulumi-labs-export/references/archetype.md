@@ -94,6 +94,15 @@ gh api "repos/pulumi-labs/pulumi-nvidia-aicr/contents/docs/_index.md?ref=1d262e3
   free of `go.mod`.
 - The generated .NET project targets net6.0; `publish-dotnet` installs 6.0.x
   and 8.0.x for that reason.
+- **SDK versions.** The Makefile defaults `VERSION ?= 0.0.1-dev`, `release.yml` regenerates the
+  SDKs with the tag (`make sdks VERSION=<tag>`, then `set_version` as a fallback), and
+  `pulumi-nvidia-aicr` commits `0.0.1-dev` (including `sdk/dotnet/version.txt`). The skill does the
+  same: `export.py --generate` passes `VERSION=0.0.1-dev`, and `check.py` requires it. No
+  Makefile deviation was needed for the .NET `version.txt` finding: `gen-sdk --version` writes the
+  file (and stamps `package.json`, the csproj and `pyproject.toml`) when the schema's language
+  settings carry `respectSchemaVersion`, which a custom `WithLanguageMap` drops (`export.md`,
+  "SDK version stamping"). `sdk_fixups` stays byte-identical to upstream apart from the deviations
+  above, so the manifest's upstream-diff tests are unchanged.
 - `make check_copyright` (run in CI) requires `Copyright .* Pulumi Corporation`
   in every `provider/**/*.go`; check.py enforces the same.
 - Maven `name` in the generated POM is blank unless the Makefile fills it, which

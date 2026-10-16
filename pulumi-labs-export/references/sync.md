@@ -16,8 +16,11 @@ bump publishes nothing.
    (display name and excluded platforms are reused from `.pulumi-labs-export.json`).
    `git add -A && git commit -m "Sync pulumi/autoregistry@<sha> (v<version>)"`.
 4. `python3 scripts/check.py --repo . --against-source <checkout>` (expect OK),
-   `python3 scripts/verify.py --repo .`, `python3 scripts/verify.py
-   --assert-pushable --repo .`; push the branch; open a PR.
+   `python3 scripts/secret_scan.py --repo .`, `python3 scripts/verify.py --repo .`,
+   `python3 scripts/verify.py --assert-pushable --repo .`; push the branch; open a PR.
+   The committed SDKs carry `0.0.1-dev` whatever the provider version, so a
+   version bump changes `source_version` in `.pulumi-labs-export.json` but not
+   the SDK manifests; the release workflow regenerates the SDKs with the tag.
 5. Reviewer clearance on the exact head SHA, green CI, squash-merge.
 6. Monorepo PR updating `lastSyncedCommit` and `lastSyncedVersion` (and
    nothing else) in `carved-providers.json`.

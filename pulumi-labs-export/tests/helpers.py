@@ -49,10 +49,11 @@ def schema_for(slug, **over):
         "repository": n["repo_url"],
         "pluginDownloadURL": n["plugin_download_url"],
         "language": {
-            "go": {"importBasePath": n["go_import_base_path"]},
-            "nodejs": {"packageName": n["npm_package"], "packageDescription": "Experimental %s provider." % slug},
-            "python": {"packageName": n["python_package"]},
-            "csharp": {"rootNamespace": n["dotnet_root_namespace"]},
+            "go": {"importBasePath": n["go_import_base_path"], "respectSchemaVersion": True},
+            "nodejs": {"packageName": n["npm_package"], "packageDescription": "Experimental %s provider." % slug,
+                       "respectSchemaVersion": True},
+            "python": {"packageName": n["python_package"], "respectSchemaVersion": True},
+            "csharp": {"rootNamespace": n["dotnet_root_namespace"], "respectSchemaVersion": True},
             "java": {"basePackage": n["java_base_package"]},
         },
     }
@@ -83,6 +84,8 @@ def build_repo(root, slug="modal", display="Modal"):
     write(repo, n["go_sdk_dir"] + "/go.mod", "module %s\n\ngo 1.27\n" % n["go_import_base_path"])
     for lang in ("java", "nodejs", "python"):
         write(repo, "sdk/%s/placeholder.txt" % lang, "x\n")
+    write(repo, "sdk/nodejs/package.json", json.dumps({"name": n["npm_package"], "version": "0.0.1-dev"}, indent=2) + "\n")
+    write(repo, "sdk/dotnet/version.txt", "0.0.1-dev\n")
     commit_all(repo)
     return repo
 
@@ -166,3 +169,50 @@ def tree(root):
             with open(full, "rb") as f:
                 out[os.path.relpath(full, root)] = (f.read(), bool(os.stat(full).st_mode & 0o111))
     return out
+
+
+FAKE_GITLEAKS = """#!/usr/bin/env python3
+import json, os, sys
+a = sys.argv[1:]
+if a[:1] == ["version"]:
+    print("8.30.1-fake")
+    sys.exit(0)
+with open(os.environ["FAKE_GITLEAKS_LOG"], "a") as f:
+    f.write(json.dumps(a) + "\\n")
+if os.environ.get("FAKE_GITLEAKS_CRASH"):
+    print("fatal: boom", file=sys.stderr)
+    sys.exit(126)
+kind = a[0]
+findings = json.loads(os.environ.get("FAKE_GITLEAKS_FINDINGS", "{}")).get(kind, [])
+out = a[a.index("--report-path") + 1]
+with open(out, "w") as f:
+    json.dump(findings, f)
+sys.exit(1 if findings else 0)
+"""
+
+
+def install_fake_gitleaks(root):
+    """Write an executable fake gitleaks under root; return (path, log path). Findings come from FAKE_GITLEAKS_FINDINGS."""
+    path = os.path.join(root, "gitleaks")
+    write(root, "gitleaks", FAKE_GITLEAKS)
+    os.chmod(path, 0o755)
+    return path, os.path.join(root, "gitleaks.log")
+
+
+@contextlib.contextmanager
+def env(**kw):
+    """Temporarily set (or with None, unset) environment variables."""
+    old = {k: os.environ.get(k) for k in kw}
+    try:
+        for k, v in kw.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        yield
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v

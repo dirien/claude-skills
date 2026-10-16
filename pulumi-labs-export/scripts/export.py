@@ -47,6 +47,8 @@ CARVED_FILE = "carved-providers.json"
 COPY_TREES = [("provider/cmd", "provider/cmd"), ("provider/pkg", "provider/pkg"),
               ("examples", "examples"), ("templates", "templates"), ("docs", "docs")]
 COPY_FILES = ["README.md", "CHANGELOG.md"]
+# Optional reviewed gitleaks allowlist; goes to the mirror root, where secret_scan.py reads it. Never templated.
+GITLEAKS_FILE = ".gitleaks.toml"
 REQUIRED_DOCS = ["docs/_index.md", "docs/installation-configuration.md"]
 VERSION_RE = re.compile(r"^0\.\d+\.\d+$")
 MAX_HITS = 40
@@ -237,7 +239,7 @@ def build_tree(src, provider, stage, *, sha, display_name, excludes, skill_commi
         if os.path.isdir(base):
             for rel, val in _walk(base).items():
                 files[dstrel + "/" + rel] = val
-    for fn in COPY_FILES:
+    for fn in COPY_FILES + [GITLEAKS_FILE]:
         p = os.path.join(pdir, fn)
         if os.path.isfile(p):
             files[fn] = _walk_one(p)
@@ -342,7 +344,11 @@ def make_env(prefix):
 
 
 def generate(out, version, prefix, log):
-    """Run make schema and make sdks in out; raise ExportError with the log tail on failure."""
+    """Run make schema and make sdks in out; raise ExportError with the log tail on failure.
+
+    version is the dev version the committed SDKs carry (check.SDK_DEV_VERSION), not the provider version: the release
+    workflow regenerates the SDKs with the tag, so the mirror's SDK files do not change on every version bump.
+    """
     env = make_env(prefix)
     for argv in (["make", "schema"], ["make", "sdks", "VERSION=" + version]):
         log("running %s in %s" % (" ".join(argv), out))
@@ -350,6 +356,9 @@ def generate(out, version, prefix, log):
         if p.returncode != 0:
             tail = "\n".join((p.stdout + p.stderr).strip().splitlines()[-25:])
             raise ExportError("`%s` failed (exit %d) in %s. Last output:\n%s" % (" ".join(argv), p.returncode, out, tail))
+    stamp = check.sdk_version_failures(out, version)
+    if stamp:
+        raise ExportError("the generated SDKs are not stamped with %s:\n  %s" % (version, "\n  ".join(stamp)))
 
 
 def export(mono, provider, out, *, do_generate=False, display_name=None, excludes=None, prefix=None,
@@ -392,7 +401,7 @@ def export(mono, provider, out, *, do_generate=False, display_name=None, exclude
         shutil.rmtree(work, ignore_errors=True)
     log("exported lib/providers/%s at %s (v%s) into %s" % (provider, sha[:12], options["source_version"], out))
     if do_generate:
-        generate(out, options["source_version"], os.path.abspath(prefix or bootstrap.default_prefix()), log)
+        generate(out, check.SDK_DEV_VERSION, os.path.abspath(prefix or bootstrap.default_prefix()), log)
     return options
 
 
@@ -476,7 +485,7 @@ def main(argv=None):
     ap.add_argument("--monorepo", required=True, help="clean checkout of pulumi/autoregistry; its HEAD is the source SHA")
     ap.add_argument("--provider", required=True, help="provider slug, listed in carved-providers.json with mode mirror")
     ap.add_argument("--out", required=True, help="the mirror repo directory (needs .git); everything but .git is replaced")
-    ap.add_argument("--generate", action="store_true", help="then run `make schema` and `make sdks VERSION=<version.txt>` in --out")
+    ap.add_argument("--generate", action="store_true", help="then run `make schema` and `make sdks VERSION=%s` in --out" % check.SDK_DEV_VERSION)
     ap.add_argument("--display-name", help="human name for CONTRIBUTING.md (default: recorded, else WithDisplayName in provider.go)")
     ap.add_argument("--exclude-platform", action="append", default=[], metavar="GOOS/GOARCH",
                     help="drop a build matrix leg (default: as recorded in --out); each needs a --reason")

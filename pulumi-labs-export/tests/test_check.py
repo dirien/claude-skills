@@ -233,5 +233,36 @@ class NamespaceGrepTest(unittest.TestCase):
         self.assertTrue(self.hits("better-uptime", "com.pulumi.betteruptime"))
 
 
+class SdkVersionTest(CheckBase):
+    def test_placeholder_package_json_names_the_cause(self):
+        helpers.write(self.repo, "sdk/nodejs/package.json", json.dumps({"version": "${VERSION}"}))
+        fails = self.assertFails(r"WRONG sdk/nodejs/package.json version: got '\$\{VERSION\}'")
+        self.assertTrue(any("respectSchemaVersion" in f for f in fails))
+
+    def test_release_version_is_not_the_committed_one(self):
+        helpers.write(self.repo, "sdk/nodejs/package.json", json.dumps({"version": "0.1.0"}))
+        self.assertFails(r"WRONG sdk/nodejs/package.json version: got '0.1.0', want '0.0.1-dev'")
+
+    def test_dotnet_version_txt_required_and_checked(self):
+        os.remove(os.path.join(self.repo, "sdk/dotnet/version.txt"))
+        self.assertFails(r"MISSING sdk/dotnet/version.txt")
+        helpers.write(self.repo, "sdk/dotnet/version.txt", "0.1.0\n")
+        self.assertFails(r"WRONG sdk/dotnet/version.txt: got '0.1.0'")
+
+    def test_dev_version_passes_and_no_sdk_is_not_judged(self):
+        self.assertEqual(check.sdk_version_failures(self.repo), [])
+        empty = os.path.join(self.tmp, "empty")
+        os.makedirs(empty)
+        self.assertEqual(check.sdk_version_failures(empty), [])
+
+    def test_respect_schema_version_required_for_each_language(self):
+        for lang in check.VERSIONED_LANGUAGES:
+            s = helpers.schema_for(self.slug)
+            del s["language"][lang]["respectSchemaVersion"]
+            helpers.write(self.repo, self.n["schema_path"], json.dumps(s))
+            fails = self.assertFails(r"MISSING schema language\.%s\.respectSchemaVersion=true" % lang)
+            self.assertEqual(len([f for f in fails if "respectSchemaVersion" in f]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

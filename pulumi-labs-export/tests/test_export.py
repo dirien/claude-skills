@@ -367,5 +367,64 @@ class DriftTest(ExportBase):
         self.assertEqual(helpers.quiet(check.main, ["--repo", self.out, "--against-source", self.mono]), 1)  # no schema/sdk yet
 
 
+FAKE_MAKE = """#!/usr/bin/env python3
+import json, os, sys
+open(os.path.join(os.environ["FAKE_MAKE_LOG"]), "a").write(" ".join(sys.argv[1:]) + "\\n")
+if sys.argv[1] == "sdks":
+    ver = [a for a in sys.argv if a.startswith("VERSION=")][0].split("=", 1)[1]
+    if os.environ.get("FAKE_MAKE_IGNORE_VERSION"):
+        ver = "${VERSION}"
+    os.makedirs("sdk/nodejs", exist_ok=True)
+    open("sdk/nodejs/package.json", "w").write(json.dumps({"version": ver}))
+    if not os.environ.get("FAKE_MAKE_IGNORE_VERSION"):
+        os.makedirs("sdk/dotnet", exist_ok=True)
+        open("sdk/dotnet/Pulumi.Labs.Demo.csproj", "w").write("<Project/>")
+        open("sdk/dotnet/version.txt", "w").write(ver + "\\n")
+"""
+
+
+class GenerateAndAllowlistTest(ExportBase):
+    def setUp(self):
+        super().setUp()
+        self.prefix = os.path.join(self.tmp, "prefix")
+        os.makedirs(os.path.join(self.prefix, "bin"))
+        fake = os.path.join(self.prefix, "bin", "make")
+        helpers.write(self.prefix, "bin/make", FAKE_MAKE)
+        os.chmod(fake, 0o755)
+        self.log = os.path.join(self.tmp, "make.log")
+        self.patch_env("FAKE_MAKE_LOG", self.log)
+
+    def patch_env(self, key, val):
+        old = os.environ.get(key)
+        self.addCleanup(lambda: os.environ.__setitem__(key, old) if old is not None else os.environ.pop(key, None))
+        os.environ[key] = val
+
+    def test_generate_uses_the_dev_version_not_version_txt(self):
+        self.do_export(do_generate=True, prefix=self.prefix)
+        with open(self.log) as f:
+            calls = f.read().splitlines()
+        self.assertEqual(calls, ["schema", "sdks VERSION=0.0.1-dev"])
+        self.assertEqual(self.read("sdk/dotnet/version.txt"), "0.0.1-dev\n")
+        self.assertNotIn("0.1.0", self.read("sdk/nodejs/package.json"))
+
+    def test_generate_refuses_unstamped_sdks(self):
+        self.patch_env("FAKE_MAKE_IGNORE_VERSION", "1")
+        with self.assertRaises(export.ExportError) as cm:
+            self.do_export(do_generate=True, prefix=self.prefix)
+        self.assertIn("not stamped with 0.0.1-dev", str(cm.exception))
+        self.assertIn("${VERSION}", str(cm.exception))
+
+    def test_gitleaks_allowlist_is_copied_to_the_mirror_root(self):
+        toml = '[extend]\nuseDefault = true\n\n[allowlist]\nregexes = [\'\'\'doc_placeholder\'\'\']\n'
+        helpers.write(self.mono, "lib/providers/%s/.gitleaks.toml" % self.slug, toml)
+        helpers.commit_all(self.mono, "allowlist")
+        self.do_export()
+        self.assertEqual(self.read(".gitleaks.toml"), toml)
+
+    def test_no_allowlist_means_no_file(self):
+        self.do_export()
+        self.assertFalse(os.path.exists(os.path.join(self.out, ".gitleaks.toml")))
+
+
 if __name__ == "__main__":
     unittest.main()
