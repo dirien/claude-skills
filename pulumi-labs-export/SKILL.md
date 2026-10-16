@@ -192,7 +192,8 @@ Per provider, in order. Details: `references/export.md` (a to d) and
 
 **a. Readiness.** On fresh `main`:
 `python3 scripts/verify.py --monorepo <autoregistry checkout> --provider <p>`.
-Stop if it fails; fix it in the monorepo.
+Stop if it fails; fix it in the monorepo. (`--profile examples` instead compiles only the provider's examples and templates against
+its local SDKs; it is the autoregistry CI gate, `references/verify.md`.)
 
 **b. Identity switch in the monorepo.** One PR to `pulumi/autoregistry`, with
 Reviewer clearance on the head SHA and green checks, before any export. It

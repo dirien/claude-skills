@@ -6,6 +6,10 @@ Three modes (details in references/verify.md):
     python3 scripts/verify.py --repo ../pulumi-modal            # the gate (default repo: cwd)
     python3 scripts/verify.py --assert-pushable --repo ../pulumi-modal
     python3 scripts/verify.py --monorepo <autoregistry checkout> --provider modal
+    python3 scripts/verify.py --monorepo <autoregistry checkout> --provider modal --profile examples
+
+`--profile examples` is the CI examples gate (examples_gate.py, references/verify.md): it compiles every example and
+template against the locally generated SDKs and prints stable failure keys `<provider>:<check>:<path>`.
 
 The gate builds a clean local clone of the repo's HEAD in a scratch directory
 (so the checkout stays untouched and the proof is for the exact commit) and
@@ -41,6 +45,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bootstrap  # noqa: E402
 import check  # noqa: E402
+import examples_gate  # noqa: E402
 import gomod  # noqa: E402
 import identity  # noqa: E402
 import names  # noqa: E402
@@ -499,9 +504,20 @@ def check_provider_info_defaults(code_root):
     return items
 
 
+def _info_path(name):
+    """Stable path of a dp_provider_info_defaults item named `file.go:LINE key`: provider/file.go#key."""
+    m = re.match(r"^(\S+?):\d+ (.+)$", name)
+    return "provider/%s#%s" % (m.group(1), m.group(2)) if m else name
+
+
 def default_provider_steps(gate, schema, code_root, examples_root, bridged=False):
-    """Record the five static default-provider / credential steps."""
-    def step(sid, title, items):
+    """Record the five static default-provider / credential steps.
+
+    Every FAIL item carries a `path` (no line numbers, so it is stable): the failure key of the examples profile.
+    """
+    def step(sid, title, items, path_fn=lambda name: name):
+        for i in items:
+            i["path"] = path_fn(i["name"])
         bad = [i for i in items if i["status"] == "FAIL"]
         gate.add(sid, title, "FAIL" if bad else "PASS",
                  "\n".join("%s: %s" % (i["name"], i["detail"]) for i in bad[:20]) + (("\n... %d more" % (len(bad) - 20)) if len(bad) > 20 else ""),
@@ -510,17 +526,20 @@ def default_provider_steps(gate, schema, code_root, examples_root, bridged=False
     if schema is None:
         for sid, title in (("dp_env_defaults", "credential config variables have env defaults"),
                            ("dp_no_required_config", "no required provider config")):
-            gate.add(sid, title, "FAIL", "no schema available to inspect")
+            gate.add(sid, title, "FAIL", "no schema available to inspect", items=[{"name": "schema", "path": "schema", "status": "FAIL",
+                                                                                     "detail": "no schema available to inspect"}])
     else:
-        step("dp_env_defaults", "credential config variables have defaultInfo.environment", check_config_env_defaults(schema))
+        step("dp_env_defaults", "credential config variables have defaultInfo.environment", check_config_env_defaults(schema),
+             lambda name: "config/" + name)
         step("dp_no_required_config", "config.defaults and provider.requiredInputs are empty", check_no_required_config(schema))
     if bridged:
         step("dp_provider_info_defaults", "ProviderInfo.Config credential defaults name their env vars and carry no literal value",
-             check_provider_info_defaults(code_root))
+             check_provider_info_defaults(code_root), _info_path)
     tags = scan_env_tags(code_root) if os.path.isdir(code_root) else []
     step("dp_no_env_tags", "no env:\"...\" struct tags on pulumi fields (infer ignores them)",
          [{"name": t.split(":", 2)[0] + ":" + t.split(":", 2)[1], "status": "FAIL", "detail": t} for t in tags]
-         or [{"name": "provider code", "status": "PASS", "detail": "no env struct tags"}])
+         or [{"name": "provider code", "status": "PASS", "detail": "no env struct tags"}],
+         lambda name: "provider/" + name.rsplit(":", 1)[0])
     prov, cred = scan_examples(examples_root, provider_credential_names(schema))
     step("dp_no_explicit_provider", "examples and templates use the default provider (no explicit Provider)",
          [{"name": h.split(":", 1)[0], "status": "FAIL", "detail": h} for h in prov]
@@ -646,7 +665,7 @@ def go_examples(gate, root, sdk_dir, sdk_module, tmp, sid="go_examples"):
         for argv in cmds:
             rc, text = gate.run(argv, dst, lp)
             if rc != 0:
-                status, detail = "FAIL", "`%s` failed (exit %d): %s" % (" ".join(argv), rc, tail_of(text, 6, 600))
+                status, detail = "FAIL", "`%s` failed (exit %d): %s" % (" ".join(argv[:3]), rc, examples_gate.summarize(text) or tail_of(text, 6, 600))
                 break
         items.append({"name": rel, "status": status, "detail": detail})
     bad = [i for i in items if i["status"] == "FAIL"]
@@ -693,12 +712,18 @@ TOOL_PROBES = [("go", ["go", "version"]), ("pulumi", ["pulumi", "version"]), ("m
                ("java", ["java", "-version"]), ("gradle", ["gradle", "--version"])]
 
 
-def toolchain_step(gate, tmp, prefix):
-    """FAIL for any missing/unrunnable tool; return {tool: version line}."""
+def toolchain_step(gate, tmp, prefix, tools=None):
+    """FAIL for any missing/unrunnable tool; return {tool: version line}.
+
+    tools limits the probes to a subset of TOOL_PROBES names (the examples profile only needs what its languages use);
+    the python venv probe runs when "python3" is in the subset or no subset is given.
+    """
     t0 = time.time()
     lp = gate.log_path("toolchain")
     versions, items = {}, []
     for tool, argv in TOOL_PROBES:
+        if tools is not None and tool not in tools:
+            continue
         exe = shutil.which(argv[0], path=gate.env.get("PATH", ""))
         if not exe:
             items.append({"name": tool, "status": "FAIL",
@@ -710,13 +735,14 @@ def toolchain_step(gate, tmp, prefix):
             continue
         versions[tool] = line
         items.append({"name": tool, "status": "PASS", "detail": "%s (%s)" % (line, exe)})
-    venv = os.path.join(tmp, "venv-probe")
-    rc, text = gate.run(["python3", "-m", "venv", venv], tmp, lp)
-    if rc != 0 or not os.path.exists(os.path.join(venv, "bin", "pip")):
-        items.append({"name": "python3 venv+pip", "status": "FAIL",
-                      "detail": "python3 -m venv did not produce a venv with pip (ensurepip missing): " + tail_of(text, 3, 300)})
-    else:
-        items.append({"name": "python3 venv+pip", "status": "PASS", "detail": "ok"})
+    if tools is None or "python3" in tools:
+        venv = os.path.join(tmp, "venv-probe")
+        rc, text = gate.run(["python3", "-m", "venv", venv], tmp, lp)
+        if rc != 0 or not os.path.exists(os.path.join(venv, "bin", "pip")):
+            items.append({"name": "python3 venv+pip", "status": "FAIL",
+                          "detail": "python3 -m venv did not produce a venv with pip (ensurepip missing): " + tail_of(text, 3, 300)})
+        else:
+            items.append({"name": "python3 venv+pip", "status": "PASS", "detail": "ok"})
     bad = [i for i in items if i["status"] == "FAIL"]
     with open(lp, "a") as f:
         f.write("\n".join("%s %s %s" % (i["status"], i["name"], i["detail"]) for i in items) + "\n")
@@ -754,6 +780,15 @@ def render_markdown(r):
     for s in r["steps"]:
         first = (s["detail"].splitlines() or [""])[0].replace("|", "\\|")[:140]
         L.append("| %s | %s | %s | %s |" % (s["status"], s["id"], s["seconds"], first))
+    ex = r.get("examples")
+    if ex is not None:
+        L += ["", "## Failure keys (%d enforced, %d report-only, %d skipped checks)" % (
+            len(ex["keys"]), len(ex["report_only_keys"]), len(ex["skipped_checks"])), ""]
+        L += ["- `%s`" % k for k in ex["keys"]] or ["(none)"]
+        if ex["report_only_keys"]:
+            L += ["", "Report-only (listed, not enforced):"] + ["- `%s`" % k for k in ex["report_only_keys"]]
+        if ex["skipped_checks"]:
+            L += ["", "Skipped (an earlier step failed): " + ", ".join(ex["skipped_checks"])]
     for s in r["steps"]:
         if s["status"] != "PASS" or s["warnings"]:
             L += ["", "### %s (%s)" % (s["id"], s["status"]), ""]
@@ -1115,6 +1150,58 @@ def github_org_warnings(code_root):
     return []
 
 
+def monorepo_schema(gate, provider, mod, work, n, build_binary=True):
+    """Build the provider and produce its schema under work/gen; return (schema, schema_file, bridged, bridged_meta).
+
+    Native: build the binary and `pulumi package get-schema` it. Bridged (a cmd/pulumi-tfgen-<p> exists): run tfgen,
+    take its schema, record the pulumi-labs metadata WARNs and stamp the identity-switch edits into the scratch copy;
+    the binary is then only built when build_binary (the examples profile does not need it). schema is None when a
+    step failed.
+    """
+    binary = os.path.join(work, "bin", "pulumi-resource-" + provider)
+    bridged = os.path.isdir(os.path.join(mod, "cmd", "pulumi-tfgen-" + provider))
+    if build_binary or not bridged:
+        gate.cmd("provider_binary", "build provider binary", ["go", "build", "-o", binary, "./cmd/pulumi-resource-" + provider], mod)
+    schema_file = os.path.join(work, "gen", "provider", "cmd", "pulumi-resource-" + provider, "schema.json")
+    os.makedirs(os.path.dirname(schema_file))
+    schema = None
+    bridged_meta = []
+    if bridged:
+        # A bridged provider's schema comes from its tfgen command, not from the binary (which is not
+        # built with the generated schema embedded in the monorepo).
+        gm = gomod.parse_gomod(open(os.path.join(mod, "go.mod"), encoding="utf-8").read())["module"]
+        tfgen_out = os.path.join(work, "tfgen")
+        os.makedirs(tfgen_out)
+        st, text = gate.cmd("get_schema", "pulumi-tfgen-%s schema" % provider,
+                            ["go", "run", "-ldflags", "-X %s/pkg/version.Version=%s" % (gm, check.SDK_DEV_VERSION),
+                             "./cmd/pulumi-tfgen-" + provider, "schema", "--out", tfgen_out], mod,
+                            env=tfgen_env(gate.env))
+        if st == "PASS":
+            try:
+                with open(os.path.join(tfgen_out, "schema.json"), encoding="utf-8") as f:
+                    schema = json.load(f)
+                schema.pop("version", None)
+                bridged_meta = metadata_warnings(schema, n)
+                stamp_bridged_schema(schema, n)
+                with open(schema_file, "w") as f:
+                    json.dump(schema, f, indent=2)
+                    f.write("\n")
+            except (OSError, ValueError) as e:
+                gate.steps[-1]["status"], gate.steps[-1]["detail"] = "FAIL", "tfgen did not write a valid schema.json: %s" % e
+    else:
+        st, text = gate.cmd("get_schema", "pulumi package get-schema", ["pulumi", "package", "get-schema", binary], work)
+        if st == "PASS":
+            try:
+                schema = json.loads(text[text.index("{"):])
+                schema.pop("version", None)
+                with open(schema_file, "w") as f:
+                    json.dump(schema, f, indent=2)
+                    f.write("\n")
+            except ValueError as e:
+                gate.steps[-1]["status"], gate.steps[-1]["detail"] = "FAIL", "schema output is not JSON: %s" % e
+    return schema, schema_file, bridged, bridged_meta
+
+
 def run_monorepo(mono, provider, prefix, report_dir, keep=False):
     """Readiness run for lib/providers/<provider> in an autoregistry checkout; return (exit code, paths)."""
     mono = os.path.abspath(mono)
@@ -1147,46 +1234,7 @@ def run_monorepo(mono, provider, prefix, report_dir, keep=False):
         gate.add("windows_build", "GOOS=windows go build of the provider (informational)", "PASS",
                  "" if rc == 0 else "FAILS: pass --exclude-platform windows/amd64 --reason \"...\" to render.py",
                  lp, 0, warnings=[] if rc == 0 else ["windows/amd64 build fails: " + tail_of(text, 3, 300)])
-        binary = os.path.join(work, "bin", "pulumi-resource-" + provider)
-        gate.cmd("provider_binary", "build provider binary", ["go", "build", "-o", binary, "./cmd/pulumi-resource-" + provider], mod)
-        schema_file = os.path.join(work, "gen", "provider", "cmd", "pulumi-resource-" + provider, "schema.json")
-        os.makedirs(os.path.dirname(schema_file))
-        bridged = os.path.isdir(os.path.join(mod, "cmd", "pulumi-tfgen-" + provider))
-        schema = None
-        bridged_meta = []
-        if bridged:
-            # A bridged provider's schema comes from its tfgen command, not from the binary (which is not
-            # built with the generated schema embedded in the monorepo).
-            gm = gomod.parse_gomod(open(os.path.join(mod, "go.mod"), encoding="utf-8").read())["module"]
-            tfgen_out = os.path.join(work, "tfgen")
-            os.makedirs(tfgen_out)
-            st, text = gate.cmd("get_schema", "pulumi-tfgen-%s schema" % provider,
-                                ["go", "run", "-ldflags", "-X %s/pkg/version.Version=%s" % (gm, check.SDK_DEV_VERSION),
-                                 "./cmd/pulumi-tfgen-" + provider, "schema", "--out", tfgen_out], mod,
-                                env=tfgen_env(gate.env))
-            if st == "PASS":
-                try:
-                    with open(os.path.join(tfgen_out, "schema.json"), encoding="utf-8") as f:
-                        schema = json.load(f)
-                    schema.pop("version", None)
-                    bridged_meta = metadata_warnings(schema, n)
-                    stamp_bridged_schema(schema, n)
-                    with open(schema_file, "w") as f:
-                        json.dump(schema, f, indent=2)
-                        f.write("\n")
-                except (OSError, ValueError) as e:
-                    gate.steps[-1]["status"], gate.steps[-1]["detail"] = "FAIL", "tfgen did not write a valid schema.json: %s" % e
-        else:
-            st, text = gate.cmd("get_schema", "pulumi package get-schema", ["pulumi", "package", "get-schema", binary], work)
-            if st == "PASS":
-                try:
-                    schema = json.loads(text[text.index("{"):])
-                    schema.pop("version", None)
-                    with open(schema_file, "w") as f:
-                        json.dump(schema, f, indent=2)
-                        f.write("\n")
-                except ValueError as e:
-                    gate.steps[-1]["status"], gate.steps[-1]["detail"] = "FAIL", "schema output is not JSON: %s" % e
+        schema, schema_file, bridged, bridged_meta = monorepo_schema(gate, provider, mod, work, n)
         gen = os.path.join(work, "gen")
         if schema is not None:
             # Rendered archetype supplies the Makefile build_* targets and sdk_fixups, as in a carved repo.
@@ -1220,6 +1268,140 @@ def run_monorepo(mono, provider, prefix, report_dir, keep=False):
             shutil.rmtree(work, ignore_errors=True)
 
 
+def _end_examples(gate, mono, state, versions, started, report_dir, base, provider, entries):
+    """Finish an examples-profile report: attach the failure keys and the example inventory."""
+    ex = examples_gate.failure_report(provider, gate.steps)
+    ex["inventory"] = {"total": len(entries), "by_language": {l: len(examples_gate.entries_of(entries, l))
+                                                              for l in sorted({e["lang"] for e in entries})}}
+    return _end(gate, "monorepo", mono, state, versions, started, report_dir, base,
+                {"provider": provider, "profile": "examples", "examples": ex})
+
+
+def run_monorepo_examples(mono, provider, prefix, report_dir, keep=False):
+    """The `examples` profile: compile every example and template of lib/providers/<provider> against the local SDKs.
+
+    Runs only what the examples need: the toolchain for the example languages, the provider build, the schema, gen-sdk and the
+    SDK build for the languages present, one compile step per language, and the dp_* checks. Every failure gets a stable key
+    (examples_gate.failure_report) that the ratchet in .github/scripts/provider-examples.py compares to the baseline.
+    """
+    mono = os.path.abspath(mono)
+    started = utcnow()
+    state = git_state(mono)
+    n = names.derive(provider)
+    base = "%s-monorepo-%s" % (provider, state["head"])
+    env = build_env(prefix)
+    work = tempfile.mkdtemp(prefix="verify-examples-", dir=os.environ.get("VERIFY_TMPDIR") or None)
+    gate = Gate(os.path.join(report_dir, base + ".logs"), env)
+    shutil.rmtree(gate.logdir, ignore_errors=True)
+    os.makedirs(gate.logdir)
+    pdir = os.path.join(mono, "lib", "providers", provider)
+    mod = os.path.join(pdir, "provider")
+    versions, entries = {}, []
+    try:
+        if not os.path.isfile(os.path.join(mod, "go.mod")):
+            gate.add("identity", "provider module present", "FAIL", "%s/go.mod not found" % mod)
+            return _end_examples(gate, mono, state, versions, started, report_dir, base, provider, entries)
+        gate.add("identity", "monorepo HEAD %s, provider %s (profile examples)" % (state["head"][:12], provider), "PASS",
+                 "" if not state["porcelain"] else "note: monorepo worktree has %d uncommitted paths" % len(state["porcelain"]))
+        entries = examples_gate.classify(pdir)
+        unknown = [e for e in entries if e["lang"] == "unknown"]
+        gate.add("example_language", "every example and template has a recognisable language (Pulumi.yaml runtime or directory name)",
+                 "FAIL" if unknown else "PASS", "\n".join("%s: no runtime and no language token in the name" % e["rel"] for e in unknown),
+                 items=[{"name": e["rel"], "path": e["rel"], "status": "FAIL", "detail": "no runtime and no language token in the name"}
+                        for e in unknown])
+        has = lambda lang: bool(examples_gate.entries_of(entries, lang))  # noqa: E731
+        langs = examples_gate.sdk_languages(entries)
+        tools = {"go", "pulumi", "make"} | ({"python3"} if has("python") else set()) | ({"node", "npm"} if has("ts") else set()) \
+            | ({"dotnet"} if has("csharp") else set()) | ({"java", "gradle"} if has("java") else set())
+        versions = toolchain_step(gate, work, prefix, tools)
+        if has("python"):
+            examples_gate.compile_python(gate, pdir, examples_gate.entries_of(entries, "python"))
+        schema, schema_file, bridged, _ = monorepo_schema(gate, provider, mod, work, n, build_binary=False)
+        gen = os.path.join(work, "gen")
+        sdk = {}
+        if schema is not None and langs:
+            render.write_repo(gen, render.make_options(provider, provider.title(), []))
+            for lang in langs:
+                gate.cmd("gen_sdk_%s" % lang, "pulumi package gen-sdk --language %s" % lang,
+                         ["pulumi", "package", "gen-sdk", "--language", lang, schema_file, "--version", "0.0.1-dev"],
+                         gen, error_res=CODEGEN_ERROR_RES, collect_warnings=True)
+            if set(langs) - {"go"}:
+                gate.cmd("sdk_fixups", "make sdk_fixups (archetype fixups)", ["make", "sdk_fixups"], gen)
+        generated = lambda lang: step_passed(gate, "gen_sdk_" + lang)  # noqa: E731
+        if schema is None:
+            for sid, lang in (("compile_go", "go"), ("compile_ts", "ts"), ("import_python", "python"),
+                              ("compile_csharp", "csharp"), ("compile_java", "java")):
+                if has(lang):
+                    examples_gate.skip(gate, sid, sid, "no schema: the provider build or schema step failed")
+        else:
+            sdk_dir = ""
+            if has("go"):
+                rel = go_sdk_dir_for(gen, schema)
+                sdk_dir = os.path.join(gen, rel)
+                sdk_module = ((schema.get("language") or {}).get("go") or {}).get("importBasePath") or ""
+                if generated("go") and os.path.isdir(sdk_dir) and not os.path.exists(os.path.join(sdk_dir, "go.mod")):
+                    gate.cmd("go_sdk_mod", "go mod init %s && go mod tidy" % sdk_module,
+                             ["sh", "-c", "go mod init %s && go mod tidy" % sdk_module], sdk_dir, error_res=CODEGEN_ERROR_RES)
+                if generated("go"):
+                    gate.cmd("go_sdk_build", "go build ./... in %s" % rel, ["go", "build", "./..."], sdk_dir)
+                if step_passed(gate, "gen_sdk_go", "go_sdk_build") and step_passed_if_present(gate, "go_sdk_mod"):
+                    go_examples(gate, pdir, sdk_dir, sdk_module, work, sid="compile_go")
+                else:
+                    examples_gate.skip(gate, "compile_go", "Go examples", "the Go SDK did not generate or build")
+            if has("ts"):
+                if generated("nodejs") and step_passed(gate, "sdk_fixups"):
+                    gate.env.update(prepare_sandbox_for("nodejs", prefix, gate.env))
+                    gate.cmd("build_nodejs_sdk", "make build_nodejs_sdk", ["make", "build_nodejs_sdk"], gen, fail_on_skip=True,
+                             collect_warnings=True)
+                if step_passed(gate, "build_nodejs_sdk"):
+                    examples_gate.compile_ts(gate, pdir, examples_gate.entries_of(entries, "ts"), os.path.join(gen, "sdk", "nodejs"), work)
+                else:
+                    examples_gate.skip(gate, "compile_ts", "TypeScript examples", "the Node SDK did not generate or build")
+            if has("python"):
+                if generated("python") and step_passed(gate, "sdk_fixups"):
+                    examples_gate.import_python(gate, pdir, examples_gate.entries_of(entries, "python"),
+                                                os.path.join(gen, "sdk", "python"), work)
+                else:
+                    examples_gate.skip(gate, "import_python", "Python imports", "the Python SDK did not generate")
+            if has("csharp"):
+                if generated("dotnet") and step_passed(gate, "sdk_fixups"):
+                    gate.env.update(prepare_sandbox_for("dotnet", prefix, gate.env))
+                    gate.cmd("build_dotnet_sdk", "make build_dotnet_sdk", ["make", "build_dotnet_sdk"], gen, fail_on_skip=True,
+                             collect_warnings=True)
+                if step_passed(gate, "build_dotnet_sdk"):
+                    examples_gate.compile_csharp(gate, pdir, examples_gate.entries_of(entries, "csharp"),
+                                                 os.path.join(gen, "sdk", "dotnet"), work)
+                else:
+                    examples_gate.skip(gate, "compile_csharp", "C# examples", "the .NET SDK did not generate or build")
+            if has("java"):
+                if generated("java") and step_passed(gate, "sdk_fixups"):
+                    gate.env.update(prepare_sandbox_for("java", prefix, gate.env))
+                    gate.cmd("build_java_sdk", "make build_java_sdk", ["make", "build_java_sdk"], gen, fail_on_skip=True,
+                             collect_warnings=True)
+                if step_passed(gate, "build_java_sdk"):
+                    examples_gate.compile_java(gate, pdir, examples_gate.entries_of(entries, "java"), os.path.join(gen, "sdk", "java"),
+                                               {provider, str(schema.get("name") or provider)}, work)
+                else:
+                    examples_gate.skip(gate, "compile_java", "Java examples", "the Java SDK did not generate or build")
+        if has("yaml"):
+            examples_gate.compile_yaml(gate, pdir, examples_gate.entries_of(entries, "yaml"), schema)
+        default_provider_steps(gate, schema, mod, pdir, bridged)
+        return _end_examples(gate, mono, state, versions, started, report_dir, base, provider, entries)
+    finally:
+        if not keep:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def step_passed(gate, *ids):
+    """True if every named step was recorded and passed."""
+    return examples_gate.step_ok(gate, *ids)
+
+
+def step_passed_if_present(gate, sid):
+    """True unless the named step was recorded and did not pass."""
+    return all(s["status"] == "PASS" for s in gate.steps if s["id"] == sid)
+
+
 # ------------------------------------------------------------------------ cli
 
 def main(argv=None):
@@ -1230,6 +1412,9 @@ def main(argv=None):
                     help="exit 0 only if a passing report exists for the current HEAD and the worktree is clean")
     ap.add_argument("--monorepo", help="readiness mode: an autoregistry checkout (needs --provider)")
     ap.add_argument("--provider", help="provider slug for --monorepo")
+    ap.add_argument("--profile", choices=("readiness", "examples"), default="readiness",
+                    help="--monorepo profile: readiness (default, the full pre-carve gate) or examples (compile every example and "
+                         "template against the locally generated SDKs, plus the dp_* checks; prints and records failure keys)")
     ap.add_argument("--prefix", default=None, help="toolchain prefix (default: $HOME/.local/pulumi-labs-export)")
     ap.add_argument("--report-dir", default=None, help="report directory (default: <prefix>/reports)")
     ap.add_argument("--keep-work", action="store_true", help="keep the scratch directory for debugging")
@@ -1245,7 +1430,8 @@ def main(argv=None):
             if not args.provider:
                 ap.error("--monorepo needs --provider")
             names.validate_slug(args.provider)
-            return run_monorepo(args.monorepo, args.provider, prefix, report_dir, args.keep_work)[0]
+            run = run_monorepo_examples if args.profile == "examples" else run_monorepo
+            return run(args.monorepo, args.provider, prefix, report_dir, args.keep_work)[0]
         return run_repo(args.repo, prefix, report_dir, args.keep_work)[0]
     except (RuntimeError, names.SlugError) as e:
         print("verify: error: %s" % e, file=sys.stderr)
