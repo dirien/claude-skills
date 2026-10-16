@@ -27,7 +27,7 @@ Monorepo path: pulumi/autoregistry lib/providers/<name>
 Target repo: pulumi-labs/pulumi-<name> (not created | created, empty | imported)
 Go module: github.com/pulumi-labs/pulumi-<name>
 Registry name: <name>: free | taken | decided
-Labels: (only if the board cannot hold labels) needs-human, rework, update, breaking, name-taken
+Labels: (only if the board cannot hold labels) needs-human, rework, update, breaking, name-taken, waiting-on-build
 
 Approval checklist (a human completes this before moving the card to Approved):
 - [ ] Registry name decided and checked free on the Pulumi Registry (a name cannot be undone)
@@ -39,6 +39,12 @@ Approval checklist (a human completes this before moving the card to Approved):
 - [ ] No open PR touches lib/providers/<name> except the Publisher's (the identity switch freezes it until it merges)
 - [ ] Vendor name and trademark use cleared, if the vendor is not Pulumi-friendly by default
 - [ ] Approved by: <human>, <date>
+
+Provider that does not exist yet: a human may create the card before `lib/providers/<name>` exists. The Publisher
+files a `provider-request` issue on `pulumi/autoregistry` (check for an existing one first; `needs-triage`, link the
+card, card description as context), adds `waiting-on-build` to `Labels:`, keeps the card in Backlog and notifies Engin
+(`normal`). When the directory appears on main, it removes `waiting-on-build`, completes the card from this template
+and links the request issue. See `AGENTS.md` ("Provider requests").
 
 Update approval (a breaking release of a published provider): a human adds "Approved: breaking v<x.y.z>" to the card.
 ```
