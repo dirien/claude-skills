@@ -74,7 +74,10 @@ CODEGEN_ERROR_RES = [re.compile(p) for p in (
 WARNING_RE = re.compile(r"(?i)\bwarn(ing)?\b")
 # Pulumi CLI self-update notices are noise, not codegen warnings.
 NOTICE_RE = re.compile(r"(?i)very old version of Pulumi|upgrade from ['\"]?\d|pulumi\.com/docs/install|new version of Pulumi")
-SKIPPING_RE = re.compile(r"(?i)\bskipping\b")
+# The archetype Make targets echo "skipping <lang> SDK build (...)" at the start of a line. Match only that:
+# setuptools prints "warning: build_py: byte-compiling is disabled, skipping." when PYTHONDONTWRITEBYTECODE is
+# set (as it is in CI), and that is not a skipped build.
+SKIPPING_RE = re.compile(r"(?im)^\s*skipping\b")
 CRED_RE = re.compile(r"token|key|secret|password|credential", re.I)
 
 
@@ -176,6 +179,10 @@ NUGET_HINT = ("hint: dotnet failed on the NuGet-Migrations named mutex; run `pyt
               "and eval its exports")
 GRADLE_HINT = ("hint: Gradle timed out connecting; its JVM ignores HTTP(S)_PROXY. Run `python3 scripts/bootstrap.py` "
                "to write $GRADLE_USER_HOME/gradle.properties from the proxy env")
+XML_ENTITY_RE = re.compile(r"MSB4025[^\n]*(EntityName|reference|entity|'<')", re.I)
+XML_HINT = ("hint: the generated .csproj is not valid XML: a provider metadata string (WithDescription, WithDisplayName, "
+            "WithKeywords, ...) contains a bare `&` or `<` that the .NET generator copies unescaped. Reword it in the "
+            "builder chain (for example `and` instead of `&`), regenerate, and rerun")
 
 
 def failure_hints(text):
@@ -185,6 +192,8 @@ def failure_hints(text):
         hints.append(NUGET_HINT)
     if GRADLE_TIMEOUT_RE.search(text or ""):
         hints.append(GRADLE_HINT)
+    if XML_ENTITY_RE.search(text or ""):
+        hints.append(XML_HINT)
     return hints
 
 
