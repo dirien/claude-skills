@@ -1,6 +1,6 @@
 {
   "name": "dirien/pulumi-skills",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "summary": "Pulumi infrastructure-as-code and Flux CD GitOps skills for Claude Code with ESC, OIDC, and cloud provider best practices.",
   "private": false,
   "skills": {

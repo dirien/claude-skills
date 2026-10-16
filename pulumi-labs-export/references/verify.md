@@ -57,6 +57,30 @@ the targeting pack NuGet restores automatically (needs `api.nuget.org`; a
 exports `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`. Gradle 9 runs on JDK 17; the
 `sdk_fixups` target already moves the generated Java toolchain to 17.
 
+## The `examples` profile (monorepo)
+
+`python3 scripts/verify.py --monorepo <autoregistry checkout> --provider <p> --profile examples` is the CI gate behind
+`.github/workflows/provider-examples.yml` (AGENTS.md, "Provider Examples Gate"). It runs only what the examples need: the toolchain
+for the languages present, the provider build (native: the binary and `get-schema`; bridged: tfgen), `gen-sdk` and the SDK build for
+those languages, one compile step per language, and the `dp_*` checks. `scripts/examples_gate.py` holds the per-language steps; every
+one builds a scratch copy against the LOCAL SDK, so the checkout is never modified.
+
+| Step id | What |
+|---|---|
+| `example_language` | every `examples/*` and `templates/*` directory resolves to a language (Pulumi.yaml `runtime`, else a language token in the name) |
+| `compile_go` | `go build` with a temporary `replace` to the local Go SDK (`${PROJECT}` placeholders replaced in the copy) |
+| `compile_ts` | `npm install --install-links` of `file:<sdk/nodejs>` (only if the project depends on the SDK package) then `tsc --noEmit` with a pinned TypeScript |
+| `compile_python`, `import_python` | in-memory byte-compile of every `.py`; then in a venv holding the local SDK (`install_python_sdk`) every name taken from the SDK package resolves |
+| `compile_csharp` | `dotnet build` after swapping the SDK `PackageReference` for a `ProjectReference` to `sdk/dotnet/*.csproj` |
+| `compile_java` | the pom's dependencies as a Gradle `compileJava`, the SDK dependency replaced by `sdk/java/build/libs/*.jar` |
+| `compile_yaml` | schema-level: every resource `type:` and invoke `function:` token of this provider in a YAML program must exist in the schema (property names are not checked: no YAML parser in a standard-library-only gate) |
+| `dp_*` | as below |
+
+A failing step gives **failure keys** `<provider>:<check>:<relative path>` (examples and templates: their directory, `dp_*`: the file, no
+line numbers). They are in the report JSON under `examples` (`keys`, `report_only_keys`, `skipped_checks`, `failures[]` with the
+detail, `counts`) and in the Markdown. A step that could not run because an earlier one failed is `SKIP`ped, not failed.
+Every check is enforced.
+
 ## Bridged repos
 
 A repo whose `.pulumi-labs-export.json` records `"archetype": "bridged"` runs the same gate; `make provider` runs tfgen first,
