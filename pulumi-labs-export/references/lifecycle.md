@@ -35,7 +35,7 @@ Approval checklist (a human completes this before moving the card to Approved):
       configured with scripts/repo_setup.sh; `repo_setup.sh verify <name>` printed all PASS (link the output)
 - [ ] The workprentice app covers the repo (all repositories, or the repo added) with Workflows permission
 - [ ] Provider Readiness passed on current monorepo main: link the `Provider Readiness` workflow run for <name>
-- [ ] Kind is supported by the skill (native today; bridged only when the skill says so)
+- [ ] Kind is supported by the skill (native and bridged)
 - [ ] No open PR touches lib/providers/<name> except the Publisher's (the identity switch freezes it until it merges)
 - [ ] Vendor name and trademark use cleared, if the vendor is not Pulumi-friendly by default
 - [ ] Approved by: <human>, <date>

@@ -42,6 +42,12 @@ force-push it. After step 6 the Publisher moves a card that was Published back
 to Handover with the `update` label, so that the publication check verifies the
 new version.
 
+## Bridged providers and upstream bumps
+
+The procedure above is the same for a bridged provider. A day-2 upstream Terraform provider bump arrives as a monorepo change
+that moves `version.txt`; the sync regenerates `schema.json`, `bridge-metadata.json` and the SDKs, and the gate's tidy, schema,
+metadata and `binary_schema` steps do the review work (`bridged.md`, "Day 2").
+
 ## Drift detection
 
 ```

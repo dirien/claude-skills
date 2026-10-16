@@ -16,6 +16,13 @@ Re-render after the vendored archetype changed (flags may be omitted, the
 recorded options are reused):
 
     python3 scripts/render.py --repo-dir ../pulumi-modal
+
+Two archetypes exist. "native" (the default; archetype/) is pulumi-nvidia-aicr, a
+pulumi-go-provider repo. "bridged" (archetype-bridged/, references/bridged.md) is a
+Terraform-bridged provider laid out like pulumi-tf-provider-boilerplate:
+
+    python3 scripts/render.py --repo-dir ../pulumi-clerk --provider clerk \\
+        --display-name Clerk --archetype bridged --flavor pf
 """
 import argparse
 import json
@@ -31,6 +38,13 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OPTIONS_FILE = ".pulumi-labs-export.json"
 LEFTOVER_RE = re.compile(r"__[A-Z][A-Z0-9_]*__")
 MATRIX_TOKEN = "__PLATFORM_MATRIX__"
+# Archetype name -> vendored template directory (relative to SKILL_DIR). "native" is the default and the only
+# one whose options file carries no "archetype" key, so existing mirrors render byte for byte as before.
+ARCHETYPES = {"native": "archetype", "bridged": "archetype-bridged"}
+DEFAULT_ARCHETYPE = "native"
+# Bridged providers wrap either a terraform-plugin-framework provider (pf) or a terraform-plugin-sdk one (sdkv2);
+# the two bridge entry points differ, so the cmd/ mains are rendered per flavor.
+FLAVORS = ("pf", "sdkv2")
 # Order matches the archetype's build matrix.
 PLATFORMS = ["linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"]
 
@@ -39,18 +53,32 @@ class RenderError(Exception):
     """Raised for any condition the operator must fix; message is actionable."""
 
 
-def load_manifest():
-    """Return the parsed archetype/manifest.json."""
-    with open(os.path.join(SKILL_DIR, "archetype", "manifest.json"), encoding="utf-8") as f:
+def archetype_of(options):
+    """Return the archetype name recorded in options (native when the key is absent)."""
+    return (options or {}).get("archetype") or DEFAULT_ARCHETYPE
+
+
+def load_manifest(archetype=DEFAULT_ARCHETYPE):
+    """Return the parsed manifest.json of an archetype (archetype/ or archetype-bridged/)."""
+    if archetype not in ARCHETYPES:
+        raise RenderError("unknown archetype %r; known: %s" % (archetype, ", ".join(sorted(ARCHETYPES))))
+    with open(os.path.join(SKILL_DIR, ARCHETYPES[archetype], "manifest.json"), encoding="utf-8") as f:
         return json.load(f)
 
 
-def make_options(provider, display_name, excludes, manifest=None):
+def make_options(provider, display_name, excludes, manifest=None, archetype=DEFAULT_ARCHETYPE, flavor=None):
     """Validate inputs and return the options dict recorded in OPTIONS_FILE.
 
-    excludes is a list of (platform, reason) pairs.
+    excludes is a list of (platform, reason) pairs. archetype is "native" or "bridged"; a bridged repo also records its
+    flavor ("pf" or "sdkv2"). A native options dict has exactly the keys it always had.
     """
-    manifest = manifest or load_manifest()
+    if archetype not in ARCHETYPES:
+        raise RenderError("unknown archetype %r; known: %s" % (archetype, ", ".join(sorted(ARCHETYPES))))
+    if archetype == "bridged" and flavor not in FLAVORS:
+        raise RenderError("a bridged repo needs a flavor, one of %s (got %r)" % (", ".join(FLAVORS), flavor))
+    if archetype == "native" and flavor:
+        raise RenderError("flavor only applies to the bridged archetype")
+    manifest = manifest or load_manifest(archetype)
     try:
         names.validate_slug(provider)
     except names.SlugError as e:
@@ -70,13 +98,39 @@ def make_options(provider, display_name, excludes, manifest=None):
         ex.append({"platform": platform, "reason": reason.strip()})
     if len(seen) == len(PLATFORMS):
         raise RenderError("cannot exclude every platform")
-    return {
+    options = {
         "provider": provider,
         "display_name": display_name.strip(),
         "archetype_repo": manifest["archetype_repo"],
         "archetype_sha": manifest["archetype_sha"],
         "exclude_platforms": ex,
     }
+    if archetype != DEFAULT_ARCHETYPE:
+        options["archetype"] = archetype
+        options["flavor"] = flavor
+    return options
+
+
+def options_from_record(rec, manifest=None):
+    """Rebuild validated options from a recorded OPTIONS_FILE dict (the inverse of make_options)."""
+    return make_options(rec["provider"], rec.get("display_name"),
+                        [(e["platform"], e["reason"]) for e in rec.get("exclude_platforms", [])], manifest,
+                        archetype=archetype_of(rec), flavor=rec.get("flavor"))
+
+
+def resolve_entries(options, manifest=None):
+    """Return [(target path, manifest entry)] for options: entries of another flavor are dropped, tokens in targets resolved."""
+    manifest = manifest or load_manifest(archetype_of(options))
+    tokens = names.template_tokens(options["provider"])
+    out = []
+    for e in manifest["files"]:
+        if e.get("flavor") not in (None, options.get("flavor")):
+            continue
+        target = e["target"]
+        for tok, val in tokens.items():
+            target = target.replace(tok, val)
+        out.append((target, e))
+    return out
 
 
 def _matrix_lines(entry, options):
@@ -122,9 +176,9 @@ def render_entry(entry, options, skill_dir=SKILL_DIR):
 
 
 def render_all(options, manifest=None):
-    """Return {target path: bytes} for every archetype file."""
-    manifest = manifest or load_manifest()
-    return {e["target"]: render_entry(e, options) for e in manifest["files"]}
+    """Return {target path: bytes} for every archetype file of the archetype recorded in options."""
+    manifest = manifest or load_manifest(archetype_of(options))
+    return {target: render_entry(e, options) for target, e in resolve_entries(options, manifest)}
 
 
 def read_options(repo_dir):
@@ -165,6 +219,8 @@ def write_repo(repo_dir, options):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo-dir", required=True, help="the carved repo (must exist)")
+    ap.add_argument("--archetype", choices=sorted(ARCHETYPES), help="native (default) or bridged; optional when %s exists" % OPTIONS_FILE)
+    ap.add_argument("--flavor", choices=FLAVORS, help="bridged only: pf (terraform-plugin-framework) or sdkv2")
     ap.add_argument("--provider", help="provider slug; optional when %s already exists" % OPTIONS_FILE)
     ap.add_argument("--display-name", help="human name used in CONTRIBUTING.md, e.g. Modal")
     ap.add_argument("--exclude-platform", action="append", default=[], metavar="GOOS/GOARCH",
@@ -190,7 +246,11 @@ def main(argv=None):
             raise RenderError("--provider is required for the first render")
         if not display:
             raise RenderError("--display-name is required for the first render")
-        options = make_options(provider, display, excludes)
+        archetype = args.archetype or archetype_of(prev)
+        flavor = args.flavor or (prev or {}).get("flavor")
+        if prev and args.archetype and args.archetype != archetype_of(prev):
+            raise RenderError("%s records archetype %r, refusing to re-render as %r" % (OPTIONS_FILE, archetype_of(prev), args.archetype))
+        options = make_options(provider, display, excludes, archetype=archetype, flavor=flavor)
         for key, val in (prev or {}).items():  # keep what export.py recorded (source SHA, version, ...)
             options.setdefault(key, val)
         report = write_repo(args.repo_dir, options)

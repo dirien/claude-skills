@@ -1,0 +1,135 @@
+{
+  "archetype": "bridged",
+  "archetype_repo": "pulumi/pulumi-tf-provider-boilerplate",
+  "archetype_sha": "c62eff764d69c837605fcc05069e489aa51d88ec",
+  "also_derived_from": [
+    {
+      "repo": "pulumi-labs/pulumi-nvidia-aicr",
+      "sha": "1d262e3db83fd120e8454b9162e762eaf743de8d",
+      "used_for": "release/test workflows (publishing jobs), sdk_fixups, LICENSE, mise.toml, .gitignore"
+    }
+  ],
+  "files": [
+    {
+      "template": "archetype-bridged/.github/workflows/release.yml.tmpl",
+      "target": ".github/workflows/release.yml",
+      "mode": "render",
+      "derived_from": [
+        "pulumi-labs/pulumi-nvidia-aicr@1d262e3:.github/workflows/release.yml (publishing jobs unchanged)"
+      ],
+      "matrix_pad": 9
+    },
+    {
+      "template": "archetype-bridged/.github/workflows/test.yml.tmpl",
+      "target": ".github/workflows/test.yml",
+      "mode": "render",
+      "derived_from": [
+        "pulumi-labs/pulumi-nvidia-aicr@1d262e3:.github/workflows/test.yml",
+        "pulumi/pulumi-tf-provider-boilerplate@c62eff7:.github/workflows/build_provider.yml (schema and metadata freshness)"
+      ],
+      "matrix_pad": 8,
+      "matrix_commented_entry": true
+    },
+    {
+      "template": "archetype/.gitignore.tmpl",
+      "target": ".gitignore",
+      "mode": "verbatim",
+      "upstream_path": ".gitignore",
+      "upstream_sha256": "1f2ccd1d69abcab63afdaa4c575af0c49d5099a43ae48eb667daaba6dcd66832"
+    },
+    {
+      "template": "archetype/.vscode/launch.json.tmpl",
+      "target": ".vscode/launch.json",
+      "mode": "render",
+      "upstream_path": ".vscode/launch.json",
+      "upstream_sha256": "40feade0be9ea68617c54384c227c6e37b0109dacf683066a61c3670b9b4d780"
+    },
+    {
+      "template": "archetype-bridged/CONTRIBUTING.md.tmpl",
+      "target": "CONTRIBUTING.md",
+      "mode": "render",
+      "derived_from": [
+        "pulumi-labs/pulumi-nvidia-aicr@1d262e3:CONTRIBUTING.md"
+      ]
+    },
+    {
+      "template": "archetype/LICENSE.tmpl",
+      "target": "LICENSE",
+      "mode": "verbatim",
+      "upstream_path": "LICENSE",
+      "upstream_sha256": "b5b2c20419cb3808c5d43c971632c6b8cf71e3a8923d5faab53f81128a7c83a8"
+    },
+    {
+      "template": "archetype-bridged/Makefile.tmpl",
+      "target": "Makefile",
+      "mode": "render",
+      "derived_from": [
+        "pulumi/pulumi-tf-provider-boilerplate@c62eff7:Makefile (tfgen schema step, PACK/CODEGEN/PROVIDER names, lint, tidy)",
+        "pulumi-labs/pulumi-nvidia-aicr@1d262e3:Makefile (gen-sdk targets, sdk_fixups, build_*_sdk, set_version, check_copyright)"
+      ]
+    },
+    {
+      "template": "archetype/mise.toml.tmpl",
+      "target": "mise.toml",
+      "mode": "verbatim",
+      "upstream_path": "mise.toml",
+      "upstream_sha256": "ad3a98c8ceacb29ac538c89afeb50aa1b8bbe502a4bd16f80bba2172d02a6d05"
+    },
+    {
+      "template": "archetype/scripts/fixup_python_input_optional.py.tmpl",
+      "target": "scripts/fixup_python_input_optional.py",
+      "mode": "verbatim",
+      "upstream_path": "scripts/fixup_python_input_optional.py",
+      "upstream_sha256": "a7167246614008c7dc00522ce4ebbb7643ad4551b1a2503a765639e382118974"
+    },
+    {
+      "template": "archetype-bridged/provider/cmd/resource-main.pf.go.tmpl",
+      "target": "provider/cmd/pulumi-resource-__PROVIDER__/main.go",
+      "mode": "render",
+      "derived_from": [
+        "pulumi/pulumi-tf-provider-boilerplate@c62eff7:provider/cmd/pulumi-resource-xyz/main.go"
+      ],
+      "flavor": "pf"
+    },
+    {
+      "template": "archetype-bridged/provider/cmd/tfgen-main.pf.go.tmpl",
+      "target": "provider/cmd/pulumi-tfgen-__PROVIDER__/main.go",
+      "mode": "render",
+      "derived_from": [
+        "pulumi/pulumi-tf-provider-boilerplate@c62eff7:provider/cmd/pulumi-tfgen-xyz/main.go"
+      ],
+      "flavor": "pf"
+    },
+    {
+      "template": "archetype-bridged/provider/cmd/resource-main.sdkv2.go.tmpl",
+      "target": "provider/cmd/pulumi-resource-__PROVIDER__/main.go",
+      "mode": "render",
+      "derived_from": [
+        "pulumi/pulumi-tf-provider-boilerplate@c62eff7:provider/cmd/pulumi-resource-xyz/main.go"
+      ],
+      "flavor": "sdkv2"
+    },
+    {
+      "template": "archetype-bridged/provider/cmd/tfgen-main.sdkv2.go.tmpl",
+      "target": "provider/cmd/pulumi-tfgen-__PROVIDER__/main.go",
+      "mode": "render",
+      "derived_from": [
+        "pulumi/pulumi-tf-provider-boilerplate@c62eff7:provider/cmd/pulumi-tfgen-xyz/main.go"
+      ],
+      "flavor": "sdkv2"
+    }
+  ],
+  "tracks": [
+    "Makefile",
+    ".ci-mgmt.yaml",
+    ".config/mise.toml",
+    ".github/workflows/build_provider.yml",
+    ".github/workflows/build_sdk.yml",
+    ".github/workflows/publish.yml",
+    ".github/workflows/release.yml",
+    ".github/workflows/test.yml",
+    "provider/cmd/",
+    "provider/pkg/version/version.go",
+    "scripts/"
+  ]
+}

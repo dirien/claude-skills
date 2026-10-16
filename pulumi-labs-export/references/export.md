@@ -21,7 +21,8 @@ with the tag (`make sdks VERSION=<tag>`), exactly as in the archetype
 that `sdk/nodejs/package.json` and `sdk/dotnet/version.txt` carry it and refuses
 otherwise, naming the cause (see "SDK version stamping" below).
 
-Preconditions, each a clear error:
+Preconditions, each a clear error (for a Terraform-bridged provider, `provider/cmd/pulumi-tfgen-<p>` present, the
+relative-replace rule, the module location, `version.txt` and the cmd mains differ: see `bridged.md`, "How export.py transforms"):
 
 - `carved-providers.json` lists the provider, `mode: "mirror"`, `repo` and
   `goModule` equal to the names from `names.py`.

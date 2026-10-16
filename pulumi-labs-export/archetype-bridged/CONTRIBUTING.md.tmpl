@@ -1,0 +1,85 @@
+# Contributing
+
+Thanks for your interest in contributing to the Pulumi __DISPLAY_NAME__ provider.
+
+## Development setup
+
+You will need:
+
+- [Go](https://go.dev/) 1.27+
+- [Pulumi CLI](https://www.pulumi.com/docs/install/) 3.165+
+- For SDK generation/build: Node.js 18+, Python 3.9+, .NET 8+, JDK 11+
+
+Clone, build, and test:
+
+```bash
+git clone https://github.com/pulumi-labs/pulumi-__PROVIDER__.git
+cd pulumi-__PROVIDER__
+make provider          # run tfgen, then build the provider binary into ./bin/
+make test              # run unit tests
+make schema            # regenerate provider/cmd/.../schema.json and bridge-metadata.json
+make sdks              # regenerate all 5 language SDKs from the schema
+make tidy              # go mod tidy in provider/ and provider/shim/
+```
+
+## Repository layout
+
+```
+provider/                            # Go module github.com/pulumi-labs/pulumi-__PROVIDER__/provider
+  resources.go                       # ProviderInfo: token mappings, config defaults, SDK identity
+  cmd/pulumi-tfgen-__PROVIDER__/     # schema generator (pulumi-terraform-bridge tfgen)
+  cmd/pulumi-resource-__PROVIDER__/  # provider binary entry point, schema.json, bridge-metadata.json
+  pkg/version/                       # version string injected via ldflags
+  shim/                              # separate Go module wrapping the upstream Terraform provider
+sdk/
+  nodejs/ python/ go/ dotnet/ java/  # generated SDKs (do not edit by hand)
+examples/                            # one directory per scenario × language
+.github/workflows/                   # CI (test.yml) and release (release.yml)
+```
+
+## Pull request flow
+
+This repository is a generated mirror. The provider's source of truth is
+maintained elsewhere; changes land there first and are synced here, so edits
+made only in this repository are overwritten by the next sync. Open an issue
+for anything that needs a source change.
+
+1. Open an issue first for non-trivial changes so we can align on direction.
+2. Make your changes on a topic branch off `main`.
+3. Run `make test` and, if you touched the schema or component API,
+   `make schema && make sdks` and commit the regenerated files.
+4. Open a PR. CI runs the full test + SDK build matrix.
+5. A maintainer reviews and merges.
+
+## Releasing
+
+Releases are tag-driven. Pushing a `v*.*.*` tag fires
+`.github/workflows/release.yml`, which:
+
+1. Cross-compiles the provider for every platform in the build matrix of
+   `release.yml`. The binary embeds the committed `schema.json`.
+2. Regenerates the schema with tfgen, fails if it differs from the committed
+   one, and generates SDKs in all five languages with the tag's version baked in.
+3. Uploads provider tarballs and SDK source archives to the GitHub Release.
+4. Publishes the SDKs: Go via a path-prefixed tag, npm, PyPI and NuGet via
+   trusted publishing, Maven Central via signing credentials from Pulumi ESC.
+
+## Code style
+
+- Go: standard `go fmt` + `go vet`. Match existing patterns; no unrelated
+  refactors in feature PRs.
+- Comments on exported symbols only when the WHY is non-obvious.
+- Keep tests focused and table-driven where it helps; provider unit tests live
+  next to `provider/resources.go`.
+- Never hand-edit `schema.json`, `bridge-metadata.json` or anything under `sdk/`;
+  change `provider/resources.go` and run `make schema sdks`.
+
+## Reporting bugs
+
+Open an issue with the bug template. Please include the provider version,
+the resource inputs involved, and the relevant `pulumi up` output. Behaviour
+that comes from the upstream Terraform provider is fixed upstream.
+
+## Code of Conduct
+
+This project follows the [Contributor Covenant](https://www.contributor-covenant.org/).

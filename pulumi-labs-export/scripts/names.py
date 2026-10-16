@@ -71,6 +71,11 @@ def derive(slug):
         "cmd_dir": "provider/cmd/pulumi-resource-" + p,
         "schema_path": "provider/cmd/pulumi-resource-%s/schema.json" % p,
         "ldflags_version_var": go_module + "/provider/pkg/version.Version",
+        # Bridged archetype (references/bridged.md): the Go module lives in provider/, next to the in-repo shim module.
+        "provider_module": go_module + "/provider",
+        "tfgen_binary": "pulumi-tfgen-" + p,
+        "tfgen_cmd_dir": "provider/cmd/pulumi-tfgen-" + p,
+        "bridge_metadata_path": "provider/cmd/pulumi-resource-%s/bridge-metadata.json" % p,
         "publisher": "Pulumi Labs",
         "plugin_download_url": "github://api.github.com/" + repo,
         "esc_environment": "github-secrets/pulumi-labs-pulumi-" + p,

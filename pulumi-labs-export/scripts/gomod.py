@@ -1,8 +1,9 @@
-"""Minimal go.mod parsing and the positive Go module-path checks.
+"""Minimal go.mod parsing, the positive Go module-path checks and the in-tree replace check.
 
 Shared by check.py (structural) and verify.py (build). Standard library only.
 """
 import os
+import posixpath
 import re
 
 SKIP_DIRS = {"node_modules", ".git", "vendor", "bin", "obj", "venv", ".venv", "__pycache__"}
@@ -96,3 +97,26 @@ def check_example_gomod(text, sdk_path, gopkg):
         if old != sdk_path or not local_ok:
             fails.append("replace %s => %s is not allowed (only %s => the local sdk/go/%s)" % (old, new, sdk_path, gopkg))
     return fails
+
+
+def check_local_replaces(files, gomod_rel, text):
+    """Return problems for relative replace directives in a go.mod: each must resolve to a go.mod inside the exported tree.
+
+    files maps the exported paths (repo-relative, '/'-separated) to anything; gomod_rel is the go.mod being checked. A
+    replace to ./shim from provider/go.mod is fine when provider/shim/go.mod is exported; one that climbs out of the
+    repository, is absolute, or names a directory without an exported go.mod is a problem (the mirror would not build).
+    """
+    problems = []
+    base = posixpath.dirname(gomod_rel)
+    for old, new in parse_gomod(text)["replaces"]:
+        if not new.startswith((".", "/")):
+            continue
+        if new.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", new):
+            problems.append("%s: replace %s => %s is an absolute path" % (gomod_rel, old, new))
+            continue
+        target = posixpath.normpath(posixpath.join(base, new))
+        if target == ".." or target.startswith("../"):
+            problems.append("%s: replace %s => %s leaves the repository" % (gomod_rel, old, new))
+        elif target + "/go.mod" not in files:
+            problems.append("%s: replace %s => %s: %s/go.mod is not part of the export" % (gomod_rel, old, new, target))
+    return problems

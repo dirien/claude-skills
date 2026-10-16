@@ -1,6 +1,6 @@
 ---
 name: pulumi-labs-export
-description: Mirror a provider from the private pulumi/autoregistry monorepo (lib/providers/<provider>/, stays the source of truth) into a generated public pulumi-labs/pulumi-<provider> repo, and re-sync it on every new version. Use when asked to export, carve out, publish, release or onboard an autoregistry provider to pulumi-labs, to run the pre-push/pre-release gate on such a repo, or to file the npm/PyPI/NuGet/Maven/ESC onboarding issues for one. Covers fixed package naming, the access check, the deterministic export.py and drift check, the sync flow, vendored archetype scaffolding rendered by script (never hand-copied), the verification gate (builds all five SDKs, default-provider and credential checks, nothing is pushed without a passing report), secret scan (`secret_scan.py`, full history plus tree), the identity-switch helper (`identity.py`), and the experimental 0.x.y rules.
+description: Mirror a provider (native pulumi-go-provider or Terraform-bridged) from the private pulumi/autoregistry monorepo (lib/providers/<provider>/, stays the source of truth) into a generated public pulumi-labs/pulumi-<provider> repo, and re-sync it on every new version. Use when asked to export, carve out, publish, release or onboard an autoregistry provider to pulumi-labs, to run the pre-push/pre-release gate on such a repo, or to file the npm/PyPI/NuGet/Maven/ESC onboarding issues for one. Covers fixed package naming, the access check, the deterministic export.py and drift check, the sync flow, vendored archetype scaffolding rendered by script (never hand-copied), the verification gate (builds all five SDKs, default-provider and credential checks, nothing is pushed without a passing report), secret scan (`secret_scan.py`, full history plus tree), the identity-switch helper (`identity.py`), and the experimental 0.x.y rules, and the bridged archetype for Terraform-bridged providers (`references/bridged.md`).
 ---
 
 # Autoregistry Publisher: pulumi-labs export
@@ -161,6 +161,30 @@ vendored in `archetype/`, written by `render.py` which `export.py` calls; see
 `provider/pkg`, generated `sdk/` and `schema.json`. Never hand-copy or
 hand-edit an archetype file; `check.py` fails if you do.
 
+### Two archetypes
+
+The scripts detect which one a provider is; you never pass it. A provider with
+`lib/providers/<p>/provider/cmd/pulumi-tfgen-<p>` is Terraform-bridged (36 of the 45
+providers) and uses the **bridged** archetype (`archetype-bridged/`, boilerplate layout,
+`references/bridged.md`). Everything else is **native** and unchanged. The procedure,
+the naming table, the gate and the reports are the same; what differs:
+
+| | native | bridged |
+|---|---|---|
+| Go module | root `go.mod` | `provider/go.mod` plus the in-repo `provider/shim` module (relative `replace` kept) |
+| Schema | built binary (`pulumi package get-schema`) | `tfgen`, committed with `bridge-metadata.json`; the binary embeds it |
+| cmd mains | the provider's | rendered by the archetype (flavor pf or sdkv2, recorded in `.pulumi-labs-export.json`) |
+| Identity lives in | `infer.NewProviderBuilder()` | `tfbridge.ProviderInfo` (`identity.py` reads it) |
+| `version.txt` | required | required (33 of 36 do not have one yet; add it in the identity-switch PR) |
+| Extra gate steps | | `metadata_diff`, `go_mod_tidy`, `binary_schema`, `dp_provider_info_defaults` |
+
+`export.py` refuses a bridged provider whose cmd mains are not the plain shape, whose
+`replace` leaves the exported tree, or that has no `version.txt`, each with the reason.
+Do not work around a refusal; the fix goes into the monorepo (or into the archetype by a
+human). The archetype was adopted on 2026-10-16 by Engin Diri, with Alberto Pose to be
+informed (`references/bridged.md`, "Decisions"); no further confirmation is needed
+before a bridged export.
+
 ## Procedure
 
 Per provider, in order. Details: `references/export.md` (a to d) and
@@ -183,7 +207,12 @@ templates and tests (Go imports and `go.mod` requires, and the npm, Python,
 typed by hand. Do it in this order:
 
 1. `python3 scripts/identity.py --check --monorepo <checkout> --provider <p>`
-   lists every remaining old-identity hit as `file:line [category]`.
+   lists every remaining old-identity hit as `file:line [category]`. For a bridged
+   provider the "builder metadata" hits are the `ProviderInfo` fields (Publisher,
+   Repository, PluginDownloadURL, the four language names, `RespectSchemaVersion`,
+   Python `PyProject`, "experimental" in `Description`); `GitHubOrg` is the upstream
+   Terraform org and stays; the vanity module path
+   `github.com/pulumi/pulumi-<p>/provider` is rewritten by the export, not by you.
 2. `python3 scripts/identity.py --apply ...` performs only the mechanical,
    string-for-string rewrites (package names and import paths in examples,
    templates, README and tests). It is idempotent and prints what is left.
@@ -248,6 +277,10 @@ default-provider pattern (works with no `Provider` resource, credentials from
 environment variables or per-resource attributes). If a step fails, fix the
 cause and re-run; never edit the gate or push around it. `references/verify.md`
 documents every check and why.
+
+For a bridged repo the gate also regenerates the schema and bridge metadata and diffs both,
+requires `go mod tidy` to be a no-op in `provider/` and its shim, and proves the built
+binary serves the committed schema (`references/bridged.md` lists every step).
 
 `check.py` is the structural part of the gate and runs inside it.
 It reports all failures and exits 1 on any: required files present; archetype

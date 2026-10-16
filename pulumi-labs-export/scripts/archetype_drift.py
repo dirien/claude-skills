@@ -3,10 +3,16 @@
 
     python3 scripts/archetype_drift.py
     python3 scripts/archetype_drift.py --ref main
+    python3 scripts/archetype_drift.py --archetype bridged
 
 Compares the sha256 of every vendored upstream original (recorded in
 archetype/manifest.json) with the same file on the archetype repo's branch,
 and lists upstream files in scaffolding locations that are not vendored.
+
+The bridged archetype (archetype-bridged/) is derived from pulumi/pulumi-tf-provider-boilerplate at a pinned SHA
+rather than copied from it, so --archetype bridged asks GitHub's compare API which upstream files changed since
+that SHA and lists those the templates track (manifest "tracks"). Run both modes: the bridged templates also
+reuse pulumi-nvidia-aicr's publishing jobs and SDK fixups.
 
 Exit 0: no drift. Exit 2: drift found (a human decides what to do; changed
 files are never merged silently). Exit 1: could not check.
@@ -98,10 +104,55 @@ def compare(manifest, fetch, tree):
     return changed, sorted(new_files)
 
 
+def compare_url(repo, base, head):
+    """GitHub REST API URL comparing two refs."""
+    return "https://api.github.com/repos/%s/compare/%s...%s" % (repo, urllib.parse.quote(base, safe=""), urllib.parse.quote(head, safe=""))
+
+
+def tracked(path, tracks):
+    """True if an upstream path is one of, or under, the tracked paths (a trailing slash tracks a directory)."""
+    return any(path == t or (t.endswith("/") and path.startswith(t)) for t in tracks)
+
+
+def bridged_drift(manifest, ref, fetcher=http_get):
+    """Return (status, ahead_by, [changed tracked paths]) of the boilerplate's ref against the pinned SHA."""
+    try:
+        d = json.loads(fetcher(compare_url(manifest["archetype_repo"], manifest["archetype_sha"], ref)))
+    except ValueError as e:
+        raise DriftError("unreadable compare response: %s" % e)
+    files = d.get("files") or []
+    if d.get("ahead_by", 0) and len(files) >= 300:
+        raise DriftError("the compare response lists 300 files and may be truncated; narrow --ref")
+    return d.get("status"), d.get("ahead_by", 0), sorted(f["filename"] for f in files if tracked(f["filename"], manifest.get("tracks", [])))
+
+
+def main_bridged(args, fetcher):
+    manifest = render.load_manifest("bridged")
+    try:
+        status, ahead, hits = bridged_drift(manifest, args.ref, fetcher)
+    except DriftError as e:
+        print("error: %s" % e, file=sys.stderr)
+        return 1
+    print("pinned:   %s @ %s" % (manifest["archetype_repo"], manifest["archetype_sha"]))
+    print("upstream: %s @ %s is %s by %s commit(s)" % (manifest["archetype_repo"], args.ref, status, ahead))
+    if not hits:
+        print("no drift: no tracked boilerplate file changed since the pinned SHA")
+        return 0
+    for path in hits:
+        print("CHANGED  %s (tracked by archetype-bridged/ templates)" % path)
+    print("\nThis script updates nothing. Give this list to a human: they decide whether to port the change into archetype-bridged/ "
+          "(new pinned SHA, updated templates and tests) in a PR to this skill.")
+    return 2
+
+
 def main(argv=None, fetcher=http_get):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ref", default="main", help="upstream branch or SHA to compare against (default main)")
+    ap.add_argument("--archetype", choices=sorted(render.ARCHETYPES), default="native",
+                    help="native (default): compare the vendored pulumi-nvidia-aicr files; bridged: compare the boilerplate since the pinned SHA")
     args = ap.parse_args(argv)
+    if args.archetype == "bridged":
+        return main_bridged(args, fetcher)
     manifest = render.load_manifest()
     repo = manifest["archetype_repo"]
     try:

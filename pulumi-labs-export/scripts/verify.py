@@ -16,6 +16,11 @@ smoke test, every Go example and template against the LOCAL Go SDK, all four
 non-Go SDK builds (a "skipping" message is a failure), the default-provider and
 credential checks, and check.py. Missing tools FAIL, they never skip.
 
+A Terraform-bridged repo (archetype "bridged", recorded in .pulumi-labs-export.json,
+references/bridged.md) runs the same gate with tfgen-based steps: the schema and the bridge
+metadata are regenerated and diffed, `go mod tidy` must leave provider/ and its shim untouched,
+the Go module is provider/, and the built provider binary must serve the committed schema.
+
 The report goes to $HOME/.local/pulumi-labs-export/reports/<repo>-<sha>.{json,md}
 (outside the repo). Exit 0 only if every step passes. `--assert-pushable`
 exits 0 only if a passing report exists for the current HEAD and the worktree
@@ -37,6 +42,7 @@ sys.path.insert(0, HERE)
 import bootstrap  # noqa: E402
 import check  # noqa: E402
 import gomod  # noqa: E402
+import identity  # noqa: E402
 import names  # noqa: E402
 import render  # noqa: E402
 import secret_scan  # noqa: E402
@@ -56,6 +62,16 @@ REQUIRED_STEPS = [
     "build_java_sdk", "dp_env_defaults", "dp_no_required_config", "dp_no_env_tags",
     "dp_no_explicit_provider", "dp_no_credential_require", "check_py", "worktree_clean_after",
 ]
+
+# Bridged repos: the same gate, with tfgen-based schema/metadata freshness, go.mod tidiness of provider/ and its shim,
+# and the proof that the built binary serves the committed schema (it embeds it).
+REQUIRED_STEPS_BRIDGED = REQUIRED_STEPS + ["metadata_diff", "go_mod_tidy", "binary_schema", "dp_provider_info_defaults"]
+
+
+def required_steps(archetype):
+    """Return the step ids a passing report must contain for an archetype ("native" when unknown)."""
+    return REQUIRED_STEPS_BRIDGED if archetype == "bridged" else REQUIRED_STEPS
+
 
 # Lines in `make sdks` output (pulumi gen-sdk codegen, go mod tidy) that mean failure.
 CODEGEN_ERROR_RES = [re.compile(p) for p in (
@@ -79,6 +95,7 @@ NOTICE_RE = re.compile(r"(?i)very old version of Pulumi|upgrade from ['\"]?\d|pu
 # set (as it is in CI), and that is not a skipped build.
 SKIPPING_RE = re.compile(r"(?im)^\s*skipping\b")
 CRED_RE = re.compile(r"token|key|secret|password|credential", re.I)
+ENVVAR_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 # ------------------------------------------------------------------ helpers
@@ -428,7 +445,61 @@ def scan_examples(root, cred_names=()):
     return prov, cred
 
 
-def default_provider_steps(gate, schema, code_root, examples_root):
+def _top_level_entries(block):
+    """Yield (key, sub-block text, offset in block) for the `"key": {...}` entries directly inside a Go map literal block."""
+    pos = 1
+    rx = re.compile(r'"([^"\n]+)":\s*\{')
+    while True:
+        m = rx.search(block, pos)
+        if not m:
+            return
+        sub = identity.go_block(block, m.end() - 1)
+        if sub is None:
+            return
+        yield m.group(1), sub, m.start()
+        pos = m.end() - 1 + len(sub)
+
+
+def check_provider_info_defaults(code_root):
+    """Items for the credential-like entries of a bridged ProviderInfo.Config map (resources.go).
+
+    An entry that declares Default must name its environment variables (Default.EnvVars, upper snake case) and must not
+    carry a literal Value: a credential default baked into the provider is never right. An entry with no Default is not a
+    failure here; the schema (dp_env_defaults) is what proves the environment fallback exists.
+    """
+    items = []
+    for fn in sorted(os.listdir(code_root)) if os.path.isdir(code_root) else []:
+        if not fn.endswith(".go") or fn.endswith("_test.go"):
+            continue
+        with open(os.path.join(code_root, fn), encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        m = re.search(r"\bConfig:\s*map\[string\]\*tfbridge\.SchemaInfo\{", text)
+        if not m:
+            continue
+        block = identity.go_block(text, m.end() - 1) or ""
+        for key, sub, off in _top_level_entries(block):
+            if not CRED_RE.search(key):
+                continue
+            line = text.count("\n", 0, m.end() - 1 + off) + 1
+            name = "%s:%d %s" % (fn, line, key)
+            if not re.search(r"\bDefault:", sub):
+                items.append({"name": name, "status": "PASS", "detail": "no Default declared (the schema check proves the env fallback)"})
+                continue
+            envs = re.search(r"\bEnvVars:\s*\[\]string\{([^}]*)\}", sub)
+            vars_ = re.findall(r'"([^"]*)"', envs.group(1)) if envs else []
+            if re.search(r"\bValue:", sub):
+                items.append({"name": name, "status": "FAIL", "detail": "credential-like config has a literal Default.Value; remove it"})
+            elif not vars_ or not all(ENVVAR_NAME_RE.match(v) for v in vars_):
+                items.append({"name": name, "status": "FAIL",
+                              "detail": "credential-like config declares Default without upper-case EnvVars (got %r); set Default: &tfbridge.DefaultInfo{EnvVars: []string{\"X_API_KEY\"}}" % vars_})
+            else:
+                items.append({"name": name, "status": "PASS", "detail": "Default.EnvVars: " + ", ".join(vars_)})
+    if not items:
+        items.append({"name": "(none)", "status": "PASS", "detail": "no credential-like entries in ProviderInfo.Config"})
+    return items
+
+
+def default_provider_steps(gate, schema, code_root, examples_root, bridged=False):
     """Record the five static default-provider / credential steps."""
     def step(sid, title, items):
         bad = [i for i in items if i["status"] == "FAIL"]
@@ -443,6 +514,9 @@ def default_provider_steps(gate, schema, code_root, examples_root):
     else:
         step("dp_env_defaults", "credential config variables have defaultInfo.environment", check_config_env_defaults(schema))
         step("dp_no_required_config", "config.defaults and provider.requiredInputs are empty", check_no_required_config(schema))
+    if bridged:
+        step("dp_provider_info_defaults", "ProviderInfo.Config credential defaults name their env vars and carry no literal value",
+             check_provider_info_defaults(code_root))
     tags = scan_env_tags(code_root) if os.path.isdir(code_root) else []
     step("dp_no_env_tags", "no env:\"...\" struct tags on pulumi fields (infer ignores them)",
          [{"name": t.split(":", 2)[0] + ":" + t.split(":", 2)[1], "status": "FAIL", "detail": t} for t in tags]
@@ -583,12 +657,17 @@ def go_examples(gate, root, sdk_dir, sdk_module, tmp, sid="go_examples"):
              lp, time.time() - t0, items=items)
 
 
-def go_module_paths(gate, clone, slug_names):
-    """`go list -m` must equal the repo module and every `go list ./...` package must sit under it."""
+def go_module_paths(gate, clone, slug_names, bridged=False):
+    """`go list -m` must equal the repo module and every `go list ./...` package must sit under it.
+
+    Bridged: the module is provider/ (github.com/pulumi-labs/pulumi-<p>/provider); the shim is a separate module.
+    """
     t0 = time.time()
     sid = "go_module_paths"
     lp = gate.log_path(sid)
-    want = slug_names["go_module"]
+    want = slug_names["provider_module"] if bridged else slug_names["go_module"]
+    if bridged:
+        clone = os.path.join(clone, "provider")
     rc, text = gate.run(["go", "list", "-m"], clone, lp)
     got = text.strip().splitlines()[-1].strip() if rc == 0 and text.strip() else ""
     reasons = []
@@ -702,6 +781,57 @@ def finish_report(gate, mode, repo, state, versions, started, report_dir, base, 
     return report, jp, mp
 
 
+def _schema_without_version(text):
+    """Parse schema JSON text (leading noise tolerated) and drop the version field; return the dict."""
+    d = json.loads(text[text.index("{"):])
+    d.pop("version", None)
+    return d
+
+
+def binary_schema_step(gate, clone, n):
+    """The built provider binary must serve the committed schema (modulo version): it embeds it with //go:embed."""
+    t0 = time.time()
+    sid = "binary_schema"
+    binary = os.path.join(clone, "bin", n["binary"])
+    lp = gate.log_path(sid)
+    rc, text = gate.run(["pulumi", "package", "get-schema", binary], clone, lp)
+    if rc != 0:
+        gate.add(sid, "provider binary serves the committed schema", "FAIL", "`pulumi package get-schema %s` failed (exit %d)" % (binary, rc),
+                 lp, time.time() - t0, tail=tail_of(text))
+        return
+    try:
+        served = _schema_without_version(text)
+        with open(os.path.join(clone, n["schema_path"]), encoding="utf-8") as f:
+            committed = _schema_without_version(f.read())
+    except (ValueError, OSError) as e:
+        gate.add(sid, "provider binary serves the committed schema", "FAIL", "cannot compare schemas: %s" % e, lp, time.time() - t0)
+        return
+    same = served == committed
+    detail = ""
+    if not same:
+        keys = sorted(k for k in set(served) | set(committed) if served.get(k) != committed.get(k))
+        detail = ("the binary serves a schema that differs from the committed one in: %s. The binary must embed the committed schema "
+                  "(//go:embed schema.json in the rendered cmd main.go); run `make schema` and commit" % ", ".join(keys))
+    gate.add(sid, "provider binary serves the committed schema (modulo version)", "PASS" if same else "FAIL", detail, lp, time.time() - t0)
+
+
+def go_mod_tidy_step(gate, clone):
+    """`make tidy` (go mod tidy in provider/ and provider/shim/) must leave go.mod and go.sum untouched."""
+    t0 = time.time()
+    sid = "go_mod_tidy"
+    lp = gate.log_path(sid)
+    rc, text = gate.run(["make", "tidy"], clone, lp)
+    if rc != 0:
+        gate.add(sid, "go.mod/go.sum of provider/ and provider/shim/ are tidy", "FAIL", "`make tidy` failed (exit %d)" % rc, lp,
+                 time.time() - t0, tail=tail_of(text))
+        return
+    rc2, out = git(clone, "status", "--porcelain", "--", "provider")
+    changed = [l for l in out.splitlines() if l.strip()]
+    gate.add(sid, "go.mod/go.sum of provider/ and provider/shim/ are tidy", "FAIL" if changed else "PASS",
+             ("`make tidy` changed: %s. Fix it in the monorepo (tools/replace-tidy enforces the same there), then re-sync" % ", ".join(changed[:6]))
+             if changed else "", lp, time.time() - t0)
+
+
 # ------------------------------------------------------------------ repo mode
 
 def run_repo(repo, prefix, report_dir, keep=False):
@@ -719,13 +849,16 @@ def run_repo(repo, prefix, report_dir, keep=False):
     try:
         # 1. identity
         slug_names = None
+        archetype = "native"
         problems = []
         if state["porcelain"]:
             problems.append("worktree is dirty (%d paths): commit or discard before the gate runs" % len(state["porcelain"]))
         opt = os.path.join(repo, render.OPTIONS_FILE)
         try:
             with open(opt, encoding="utf-8") as f:
-                slug = json.load(f)["provider"]
+                rec = json.load(f)
+            slug = rec["provider"]
+            archetype = render.archetype_of(rec)
             slug_names = names.derive(slug)
         except (OSError, ValueError, KeyError, names.SlugError) as e:
             problems.append("cannot read provider from %s: %s" % (render.OPTIONS_FILE, e))
@@ -735,6 +868,8 @@ def run_repo(repo, prefix, report_dir, keep=False):
         if slug_names is None:
             return _end(gate, "repo", repo, state, versions, started, report_dir, base)
         n = slug_names
+        bridged = archetype == "bridged"
+        extra = {"archetype": archetype} if bridged else None
         clone = os.path.join(work, "build")
         lp = gate.log_path("clone")
         rc, text = gate.run(["git", "clone", "-q", "--no-checkout", "--no-hardlinks", repo, clone], work, lp)
@@ -742,11 +877,11 @@ def run_repo(repo, prefix, report_dir, keep=False):
             rc, text = gate.run(["git", "-C", clone, "checkout", "-q", "--detach", state["head"]], work, lp)
         if rc != 0:
             gate.add("make_provider", "make provider", "FAIL", "cannot make a clean local clone of HEAD: " + tail_of(text, 5, 500))
-            return _end(gate, "repo", repo, state, versions, started, report_dir, base)
+            return _end(gate, "repo", repo, state, versions, started, report_dir, base, extra)
 
         gate.cmd("make_provider", "make provider", ["make", "provider"], clone)
         gate.cmd("make_lint", "make lint", ["make", "lint"], clone)
-        if has_c_compiler(env):
+        if bridged or has_c_compiler(env):
             gate.cmd("make_test", "make test", ["make", "test"], clone)
         else:
             gate.cmd("make_test", "make test (no -race: no C compiler)",
@@ -763,6 +898,18 @@ def run_repo(repo, prefix, report_dir, keep=False):
                  "FAIL" if rc != 0 or rc2 != 0 else "PASS",
                  "" if rc == 0 and rc2 == 0 else ("schema.json is not tracked" if rc2 != 0 else "schema.json is out of date: run `make schema` and commit"),
                  lp, time.time() - t0, tail=tail_of(text))
+        if bridged:
+            # tfgen also writes bridge-metadata.json (and Pulumi.yaml) next to the schema; both are committed.
+            t0 = time.time()
+            lp = gate.log_path("metadata_diff")
+            meta_paths = [n["bridge_metadata_path"], n["cmd_dir"] + "/Pulumi.yaml"]
+            rc, text = gate.run(["git", "-C", clone, "diff", "--exit-code", "--"] + meta_paths, work, lp)
+            rc2, _ = gate.run(["git", "-C", clone, "ls-files", "--error-unmatch", n["bridge_metadata_path"]], work, lp)
+            gate.add("metadata_diff", "regenerated bridge metadata equals committed (git diff --exit-code)",
+                     "FAIL" if rc != 0 or rc2 != 0 else "PASS",
+                     "" if rc == 0 and rc2 == 0 else ("bridge-metadata.json is not tracked" if rc2 != 0 else
+                                                      "bridge-metadata.json is out of date: run `make schema` and commit"),
+                     lp, time.time() - t0, tail=tail_of(text))
 
         # Always the dev version: it is what export.py --generate committed, and the release workflow re-stamps it.
         argv = ["make", "sdks", "VERSION=" + check.SDK_DEV_VERSION]
@@ -778,7 +925,10 @@ def run_repo(repo, prefix, report_dir, keep=False):
         sdk_dir = os.path.join(clone, n["go_sdk_dir"])
         gate.cmd("go_sdk_build", "go build ./... in %s" % n["go_sdk_dir"], ["go", "build", "./..."], sdk_dir)
         gate.cmd("go_sdk_vet", "go vet ./... in %s" % n["go_sdk_dir"], ["go", "vet", "./..."], sdk_dir)
-        go_module_paths(gate, clone, n)
+        go_module_paths(gate, clone, n, bridged)
+        if bridged:
+            go_mod_tidy_step(gate, clone)
+            binary_schema_step(gate, clone, n)
         consumer_smoke(gate, "go_consumer_smoke", sdk_dir, n["go_import_base_path"], work)
         go_examples(gate, clone, sdk_dir, n["go_import_base_path"], work)
         for lang in ("nodejs", "python", "dotnet", "java"):
@@ -791,14 +941,14 @@ def run_repo(repo, prefix, report_dir, keep=False):
                 schema = json.load(f)
         except (OSError, ValueError):
             pass
-        default_provider_steps(gate, schema, os.path.join(clone, "provider"), clone)
+        default_provider_steps(gate, schema, os.path.join(clone, "provider"), clone, bridged)
         gate.cmd("check_py", "check.py --repo", [sys.executable, os.path.join(HERE, "check.py"), "--repo", repo], work)
         after = git_state(repo)
         moved = after["head"] != state["head"] or after["porcelain"]
         gate.add("worktree_clean_after", "checkout unchanged by the gate (HEAD same, porcelain empty)",
                  "FAIL" if moved else "PASS", "the checkout changed during the gate" if moved else "")
         state["porcelain"] = after["porcelain"]
-        return _end(gate, "repo", repo, state, versions, started, report_dir, base)
+        return _end(gate, "repo", repo, state, versions, started, report_dir, base, extra)
     finally:
         if not keep:
             shutil.rmtree(work, ignore_errors=True)
@@ -843,7 +993,14 @@ def assert_pushable(repo, report_dir):
     if r.get("porcelain"):
         return False, "NOT PUSHABLE: the gate ran on a dirty worktree"
     steps = {s.get("id"): s for s in r.get("steps", [])}
-    missing = [i for i in REQUIRED_STEPS if i not in steps]
+    try:
+        with open(os.path.join(repo, render.OPTIONS_FILE), encoding="utf-8") as f:
+            archetype = render.archetype_of(json.load(f))
+    except (OSError, ValueError):
+        archetype = "native"
+    if r.get("archetype", "native") != archetype:
+        return False, "NOT PUSHABLE: the report is for the %s archetype but the repo records %s" % (r.get("archetype", "native"), archetype)
+    missing = [i for i in required_steps(archetype) if i not in steps]
     if missing:
         return False, "NOT PUSHABLE: report lacks required step(s): %s" % ", ".join(missing)
     failed = [i for i, s in steps.items() if s.get("status") != "PASS"]
@@ -903,6 +1060,61 @@ def metadata_warnings(schema, n):
     return out
 
 
+def tfgen_env(env):
+    """Environment for a tfgen run: PULUMI_CONVERT=0 as in the archetype Makefile (decision 5 in references/bridged.md).
+
+    With the converter on, tfgen converts the upstream HCL examples and can panic in the PCL binder on a provider's examples,
+    which would fail the schema step for a reason that has nothing to do with readiness (doppler, langfuse, prefect, qdrant-cloud).
+    """
+    return dict(env, PULUMI_CONVERT="0")
+
+
+def stamp_bridged_schema(schema, n):
+    """Apply the identity-switch schema edits a monorepo bridged provider still lacks to the gate's scratch schema.
+
+    Return the list of fields set. A monorepo provider has not had its identity-switch edit yet, so its ProviderInfo may lack
+    `RespectSchemaVersion: true` (`gen-sdk --version` is then ignored and the .NET SDK cannot build for want of version.txt)
+    and `Golang.ImportBasePath` (the Go SDK has no module path, so `go mod init` fails). Both are applied to the scratch copy so
+    the SDK steps still prove everything else; `metadata_warnings` runs on the unstamped schema and reports each as a WARN
+    (identity.py lists the same fields for the identity-switch PR). A present importBasePath is never overwritten.
+    """
+    changed = []
+    langs = schema.setdefault("language", {})
+    for lang in check.VERSIONED_LANGUAGES:
+        info = langs.setdefault(lang, {})
+        if info.get("respectSchemaVersion") is not True:
+            info["respectSchemaVersion"] = True
+            changed.append("language.%s.respectSchemaVersion" % lang)
+    go = langs["go"]
+    if not go.get("importBasePath"):
+        go["importBasePath"] = n["go_import_base_path"]
+        changed.append("language.go.importBasePath")
+    return changed
+
+
+def github_org_warnings(code_root):
+    """Return a WARN list when the bridged provider's tfbridge.ProviderInfo sets no GitHubOrg.
+
+    GitHubOrg names the upstream Terraform provider's organisation; with it tfgen brings the upstream docs into the schema.
+    It is recommended, not required (decision 5 in references/bridged.md).
+    """
+    try:
+        names_ = sorted(fn for fn in os.listdir(code_root) if fn.endswith(".go") and not fn.endswith("_test.go"))
+    except OSError:
+        return []
+    for fn in names_:
+        with open(os.path.join(code_root, fn), encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        m = re.search(r"tfbridge\.ProviderInfo\{", text)
+        if m:
+            info = identity.go_block(text, m.end() - 1) or ""
+            if re.search(r"\bGitHubOrg:", info):
+                return []
+            return ["%s:%d ProviderInfo has no GitHubOrg: set it to the upstream Terraform provider's organisation so tfgen brings the "
+                    "upstream docs into the schema (recommended, not required)" % (fn, text.count("\n", 0, m.start()) + 1)]
+    return []
+
+
 def run_monorepo(mono, provider, prefix, report_dir, keep=False):
     """Readiness run for lib/providers/<provider> in an autoregistry checkout; return (exit code, paths)."""
     mono = os.path.abspath(mono)
@@ -939,17 +1151,42 @@ def run_monorepo(mono, provider, prefix, report_dir, keep=False):
         gate.cmd("provider_binary", "build provider binary", ["go", "build", "-o", binary, "./cmd/pulumi-resource-" + provider], mod)
         schema_file = os.path.join(work, "gen", "provider", "cmd", "pulumi-resource-" + provider, "schema.json")
         os.makedirs(os.path.dirname(schema_file))
-        st, text = gate.cmd("get_schema", "pulumi package get-schema", ["pulumi", "package", "get-schema", binary], work)
+        bridged = os.path.isdir(os.path.join(mod, "cmd", "pulumi-tfgen-" + provider))
         schema = None
-        if st == "PASS":
-            try:
-                schema = json.loads(text[text.index("{"):])
-                schema.pop("version", None)
-                with open(schema_file, "w") as f:
-                    json.dump(schema, f, indent=2)
-                    f.write("\n")
-            except ValueError as e:
-                gate.steps[-1]["status"], gate.steps[-1]["detail"] = "FAIL", "schema output is not JSON: %s" % e
+        bridged_meta = []
+        if bridged:
+            # A bridged provider's schema comes from its tfgen command, not from the binary (which is not
+            # built with the generated schema embedded in the monorepo).
+            gm = gomod.parse_gomod(open(os.path.join(mod, "go.mod"), encoding="utf-8").read())["module"]
+            tfgen_out = os.path.join(work, "tfgen")
+            os.makedirs(tfgen_out)
+            st, text = gate.cmd("get_schema", "pulumi-tfgen-%s schema" % provider,
+                                ["go", "run", "-ldflags", "-X %s/pkg/version.Version=%s" % (gm, check.SDK_DEV_VERSION),
+                                 "./cmd/pulumi-tfgen-" + provider, "schema", "--out", tfgen_out], mod,
+                                env=tfgen_env(gate.env))
+            if st == "PASS":
+                try:
+                    with open(os.path.join(tfgen_out, "schema.json"), encoding="utf-8") as f:
+                        schema = json.load(f)
+                    schema.pop("version", None)
+                    bridged_meta = metadata_warnings(schema, n)
+                    stamp_bridged_schema(schema, n)
+                    with open(schema_file, "w") as f:
+                        json.dump(schema, f, indent=2)
+                        f.write("\n")
+                except (OSError, ValueError) as e:
+                    gate.steps[-1]["status"], gate.steps[-1]["detail"] = "FAIL", "tfgen did not write a valid schema.json: %s" % e
+        else:
+            st, text = gate.cmd("get_schema", "pulumi package get-schema", ["pulumi", "package", "get-schema", binary], work)
+            if st == "PASS":
+                try:
+                    schema = json.loads(text[text.index("{"):])
+                    schema.pop("version", None)
+                    with open(schema_file, "w") as f:
+                        json.dump(schema, f, indent=2)
+                        f.write("\n")
+                except ValueError as e:
+                    gate.steps[-1]["status"], gate.steps[-1]["detail"] = "FAIL", "schema output is not JSON: %s" % e
         gen = os.path.join(work, "gen")
         if schema is not None:
             # Rendered archetype supplies the Makefile build_* targets and sdk_fixups, as in a carved repo.
@@ -973,10 +1210,10 @@ def run_monorepo(mono, provider, prefix, report_dir, keep=False):
                 gate.env.update(prepare_sandbox_for(lang, prefix, gate.env))
                 gate.cmd("build_%s_sdk" % lang, "build %s SDK (make build_%s_sdk)" % (lang, lang),
                          ["make", "build_%s_sdk" % lang], gen, fail_on_skip=True, collect_warnings=True)
-            meta = metadata_warnings(schema, n)
+            meta = (bridged_meta + github_org_warnings(mod)) if bridged else metadata_warnings(schema, n)
             gate.add("metadata_pulumi_labs", "builder already carries pulumi-labs Go path, repository, publisher, plugin URL (WARN only)",
                      "PASS", "\n".join(meta), warnings=meta)
-        default_provider_steps(gate, schema, mod, pdir)
+        default_provider_steps(gate, schema, mod, pdir, os.path.isdir(os.path.join(mod, "cmd", "pulumi-tfgen-" + provider)))
         return _end(gate, "monorepo", mono, state, versions, started, report_dir, base, {"provider": provider})
     finally:
         if not keep:
