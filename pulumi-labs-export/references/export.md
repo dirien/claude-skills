@@ -91,6 +91,11 @@ Contents of the PR, from the first real run on modal:
 1. `carved-providers.json` entry: `name`, `repo`, `goModule`, `mode: "mirror"`,
    `registryName`, `listed: false`, and `exportedAt`, `lastSyncedCommit`,
    `lastSyncedVersion` all `null`. (Manual.)
+1a. `lib/providers/<p>/version.txt` = `0.1.0` if the provider has none (every
+   bridged provider today). `export.py` refuses without it, and
+   `provider-metadata` requires it for every listed provider afterwards.
+   From then on only the Publisher's release-cut PR changes it
+   (`lifecycle.md`).
 2. Builder metadata in `provider/pkg/provider/provider.go`: `WithPublisher("Pulumi Labs")`,
    `WithRepository`, `WithGoImportPath`, `WithPluginDownloadURL`
    (`github://api.github.com/pulumi-labs/pulumi-<p>`), `WithLanguageMap`

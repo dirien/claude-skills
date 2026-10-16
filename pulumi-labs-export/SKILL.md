@@ -30,7 +30,8 @@ without breaking customers.
 
 All scripts are Python 3 standard library plus `gh` and `git` (`archetype_drift.py`, `export.py` and `identity.py` never call `gh` or the network; `export.py --generate` runs `make`, which downloads Go modules). Run them as
 `python3 scripts/<x>.py` from this skill's folder; every one has `--help`
-and exits non-zero with an exact message. Details live in `references/`.
+and exits non-zero with an exact message. Details live in `references/`. `scripts/repo_setup.sh` is the one exception to
+"all scripts are Python": a bash script for humans only (never run it).
 
 The canonical copy of this skill lives in `pulumi/autoregistry`
 (`skills/pulumi-labs-export`); this repo mirrors it.
@@ -126,7 +127,11 @@ endpoint and status, and note that credentials are fixed per session (a
 fix may need a new session). Never search for, print, or swap
 credentials. If the target repo does not exist, you cannot create it;
 file an issue asking a pulumi-labs admin to create it and grant the
-Workprentice app push.
+Workprentice app push. **`scripts/repo_setup.sh` is for humans only. You
+never run it, and you never create, configure, protect or delete a
+repository.** It exists so Engin can create the empty public repo with the
+right settings (`references/repo-setup.md`). The repo must be empty (no
+README); a repo with commits you did not push is a stop-and-escalate.
 
 ## The mirror model
 
@@ -143,6 +148,11 @@ Workprentice app push.
   `lastSyncedVersion`). Mirrored providers are never released from the
   monorepo (`plan-release.sh` refuses them). Only people tag the mirror; you
   never tag. Versions stay `0.x.y`.
+- **Versions and release notes** (`references/lifecycle.md`). Every mirrored
+  provider has `version.txt` (`0.x.y`); only your release-cut PR bumps it. The
+  Architect writes `[Unreleased]` CHANGELOG entries; you roll them into the
+  new version's section. Weekly cut rule, `BREAKING:` escalation and the
+  candidate sync (re-sync an untagged version) are in `lifecycle.md`.
 
 The mirror's layout is the archetype's (copy of `pulumi-labs/pulumi-nvidia-aicr`,
 vendored in `archetype/`, written by `render.py` which `export.py` calls; see
@@ -196,13 +206,20 @@ PR setting `exportedAt`, `lastSyncedCommit`, `lastSyncedVersion`.
 **d. Onboarding issues.** `scripts/onboarding.py` (below). Do not ask for a
 tag until every onboarding issue is closed.
 
-**e. Sync on every new version.** Trigger: `lib/providers/<p>/version.txt` on
+**e. Sync on every new version.** Run the drift check on the mirror's `main`
+first and stop on any `DRIFT` (`references/sync.md`, step 0). Trigger: `lib/providers/<p>/version.txt` on
 monorepo `main` is greater than the entry's `lastSyncedVersion`. Branch
 `sync/v<version>` in the mirror, `export.py --out . --generate`, commit
 `Sync pulumi/autoregistry@<sha> (v<version>)`, `verify.py`,
 `--assert-pushable`, push the branch, open a PR, get Reviewer clearance and
 green CI, squash-merge. Then a monorepo PR updates the sync fields. Then tell
 Engin "ready to tag v<version>". Never tag.
+
+**f. Release cut.** Between syncs, decide whether a new version is due and open
+the release-cut PR (only `version.txt` and the CHANGELOG rollover) per
+`references/lifecycle.md`. PR branches, titles and the clearance protocol are
+there too, as are the mirror-side events (Dependabot or outside PRs on a mirror,
+a hand edit) and breaking, removed or renamed providers.
 
 ## Before every push (initial import and every later PR branch)
 
