@@ -83,34 +83,52 @@ class ExplicitProviderTest(unittest.TestCase):
 
 
 class CredentialRequireTest(unittest.TestCase):
+    CRED = {"tokenid", "tokensecret"}
     CASES = [
         (".ts", 'const t = config.requireSecret("tokenId");', ["tokenId"]),
-        (".ts", 'const t = config.require("apiKey");', ["apiKey"]),
-        (".ts", 'const fs = require("fs");', []),
+        (".ts", 'const t = config.get("modal:tokenId");', ["modal:tokenId"]),
         (".ts", 'const n = config.require("volumeName");', []),
+        (".ts", 'const fs = require("fs");', []),
         (".py", 'x = config.require_secret("token_secret")', ["token_secret"]),
+        (".py", 'x = config.get_secret("TokenId")', ["TokenId"]),
         (".py", 'x = config.require("queue_name")', []),
         (".go", 'tok := cfg.RequireSecret("tokenId")', ["tokenId"]),
-        (".go", 'tok := config.Require(ctx, "modal:password")', ["modal:password"]),
-        (".cs", 'var t = config.RequireSecret("hfToken");', ["hfToken"]),
-        (".java", 'var t = config.requireSecret("workerApiKey");', ["workerApiKey"]),
+        (".go", 'tok := config.Get(ctx, "tokenSecret")', ["tokenSecret"]),
+        (".cs", 'var t = config.RequireSecret("tokenId");', ["tokenId"]),
+        (".java", 'var t = config.requireSecret("tokenSecret");', ["tokenSecret"]),
+        # App secrets stored in a Secret resource are not the provider's credentials: must pass.
+        (".ts", 'const hf = config.requireSecret("hfToken");', []),
+        (".py", 'worker_api_key = config.require_secret("workerApiKey")', []),
+        (".go", 'hfToken := cfg.RequireSecret("hfToken")', []),
+        (".cs", 'var k = config.RequireSecret("workerApiKey");', []),
+        (".java", 'var n = config.require("secretName");', []),
         (".ts", '// config.requireSecret("tokenId")', []),
         (".yaml", 'key: ${tokenId}', []),
     ]
 
     def test_cases(self):
         for ext, snippet, want in self.CASES:
-            self.assertEqual([k for _, k, _ in verify.find_credential_requires(ext, snippet)], want, (ext, snippet))
+            self.assertEqual([k for _, k, _ in verify.find_credential_requires(ext, snippet, self.CRED)], want, (ext, snippet))
+
+    def test_no_provider_credentials_means_nothing_flagged(self):
+        self.assertEqual(verify.find_credential_requires(".ts", 'config.requireSecret("tokenId")', set()), [])
+
+    def test_names_from_schema(self):
+        schema = {"config": {"variables": {"tokenId": {"secret": True}, "api_key": {}, "serverAddr": {}}}}
+        self.assertEqual(verify.provider_credential_names(schema), {"tokenid", "apikey"})
+        self.assertEqual(verify.norm_key("modal:token_id"), "tokenid")
 
     def test_scan_examples_and_steps(self):
         with helpers.tempfile.TemporaryDirectory() as d:
             helpers.write(d, "examples/a-ts/index.ts", 'const p = new modal.Provider("p");\nconfig.requireSecret("tokenId");\n')
+            helpers.write(d, "templates/b-ts/index.ts", 'const hf = config.requireSecret("hfToken");\n')
             helpers.write(d, "templates/b-go/main.go", 'modal.NewSecret(ctx, "s", nil)\n')
             helpers.write(d, "examples/a-ts/node_modules/x/index.ts", 'new a.Provider("x")')
-            prov, cred = verify.scan_examples(d)
+            prov, cred = verify.scan_examples(d, {"tokenid"})
             self.assertEqual(len(prov), 1)
             self.assertIn("examples/a-ts/index.ts:1", prov[0])
             self.assertEqual(len(cred), 1)
+            self.assertNotIn("hfToken", cred[0])
             gate = verify.Gate(os.path.join(d, "logs"), {})
             schema = {"config": {"variables": {"tokenId": {"secret": True}}}}
             verify.default_provider_steps(gate, schema, os.path.join(d, "provider"), d)
@@ -118,6 +136,14 @@ class CredentialRequireTest(unittest.TestCase):
             self.assertEqual(st, {"dp_env_defaults": "FAIL", "dp_no_required_config": "PASS", "dp_no_env_tags": "PASS",
                                   "dp_no_explicit_provider": "FAIL", "dp_no_credential_require": "FAIL"})
             self.assertEqual(gate.steps[0]["items"][0]["name"], "tokenId")
+
+    def test_hf_token_template_alone_passes(self):
+        with helpers.tempfile.TemporaryDirectory() as d:
+            helpers.write(d, "templates/ml/index.ts", 'const hfToken = config.requireSecret("hfToken");\nconst k = config.requireSecret("workerApiKey");\n')
+            gate = verify.Gate(os.path.join(d, "logs"), {})
+            schema = {"config": {"variables": {"tokenId": {"secret": True, "defaultInfo": {"environment": ["T"]}}}}}
+            verify.default_provider_steps(gate, schema, os.path.join(d, "provider"), d)
+            self.assertTrue(gate.ok, gate.steps)
 
 
 class GoModTest(unittest.TestCase):
