@@ -10,13 +10,20 @@ and lists upstream files in scaffolding locations that are not vendored.
 
 Exit 0: no drift. Exit 2: drift found (a human decides what to do; changed
 files are never merged silently). Exit 1: could not check.
+
+Needs no credentials and no `gh`: the archetype repo is public, so it uses
+unauthenticated HTTPS (raw.githubusercontent.com for content, the GitHub REST
+API for the tree). The unauthenticated API allows 60 requests per hour per IP;
+a rate-limit response is reported as such.
 """
 import argparse
 import hashlib
 import json
 import os
-import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render  # noqa: E402
@@ -32,27 +39,47 @@ class DriftError(Exception):
     """Upstream could not be read."""
 
 
-def gh_raw(repo, path, ref):
-    """Fetch one upstream file's bytes with gh."""
+def http_get(url):
+    """GET url unauthenticated over HTTPS; return bytes or raise DriftError with a clear reason."""
+    req = urllib.request.Request(url, headers={"User-Agent": "pulumi-labs-export-archetype-drift",
+                                               "Accept": "application/vnd.github+json"})
     try:
-        r = subprocess.run(["gh", "api", "repos/%s/contents/%s?ref=%s" % (repo, path, ref),
-                            "-H", "Accept: application/vnd.github.raw"], capture_output=True, timeout=120)
-    except FileNotFoundError:
-        raise DriftError("gh not found on PATH")
-    if r.returncode != 0:
-        raise DriftError("cannot fetch %s@%s: %s" % (path, ref, r.stderr.decode("utf-8", "replace").strip()[:200]))
-    return r.stdout
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        remaining = e.headers.get("X-RateLimit-Remaining") if e.headers else None
+        if e.code in (403, 429) and (remaining == "0" or e.code == 429 or e.headers.get("Retry-After")):
+            reset = e.headers.get("X-RateLimit-Reset", "unknown")
+            raise DriftError("GitHub rate limit hit for unauthenticated requests (HTTP %d, resets at epoch %s); "
+                             "wait and retry, do not look for credentials" % (e.code, reset))
+        raise DriftError("GET %s failed: HTTP %d" % (url, e.code))
+    except (urllib.error.URLError, OSError) as e:
+        raise DriftError("GET %s failed: %s" % (url, e))
 
 
-def gh_tree(repo, ref):
-    """Return (commit sha, [blob paths]) of the upstream ref."""
+def raw_url(repo, path, ref):
+    """URL of one upstream file's raw content."""
+    return "https://raw.githubusercontent.com/%s/%s/%s" % (repo, urllib.parse.quote(ref, safe="/"), urllib.parse.quote(path))
+
+
+def tree_url(repo, ref):
+    """GitHub REST API URL of the recursive tree of ref."""
+    return "https://api.github.com/repos/%s/git/trees/%s?recursive=1" % (repo, urllib.parse.quote(ref, safe=""))
+
+
+def gh_raw(repo, path, ref, fetcher=http_get):
+    """Fetch one upstream file's bytes (fetcher is injectable for offline tests)."""
+    return fetcher(raw_url(repo, path, ref))
+
+
+def gh_tree(repo, ref, fetcher=http_get):
+    """Return (tree sha, [blob paths]) of the upstream ref."""
     try:
-        r = subprocess.run(["gh", "api", "repos/%s/git/trees/%s?recursive=1" % (repo, ref)], capture_output=True, timeout=120)
-    except FileNotFoundError:
-        raise DriftError("gh not found on PATH")
-    if r.returncode != 0:
-        raise DriftError("cannot list tree of %s@%s: %s" % (repo, ref, r.stderr.decode("utf-8", "replace").strip()[:200]))
-    d = json.loads(r.stdout)
+        d = json.loads(fetcher(tree_url(repo, ref)))
+    except ValueError as e:
+        raise DriftError("unreadable tree response for %s@%s: %s" % (repo, ref, e))
+    if d.get("truncated"):
+        raise DriftError("upstream tree of %s@%s is truncated by the API; cannot check for new files" % (repo, ref))
     return d.get("sha"), [t["path"] for t in d.get("tree", []) if t.get("type") == "blob"]
 
 
@@ -71,15 +98,15 @@ def compare(manifest, fetch, tree):
     return changed, sorted(new_files)
 
 
-def main(argv=None):
+def main(argv=None, fetcher=http_get):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ref", default="main", help="upstream branch or SHA to compare against (default main)")
     args = ap.parse_args(argv)
     manifest = render.load_manifest()
     repo = manifest["archetype_repo"]
     try:
-        sha, tree = gh_tree(repo, args.ref)
-        changed, new_files = compare(manifest, lambda r, p: gh_raw(r, p, args.ref), tree)
+        sha, tree = gh_tree(repo, args.ref, fetcher)
+        changed, new_files = compare(manifest, lambda r, p: gh_raw(r, p, args.ref, fetcher), tree)
     except DriftError as e:
         print("error: %s" % e, file=sys.stderr)
         return 1
