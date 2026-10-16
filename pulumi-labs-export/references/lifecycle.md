@@ -22,7 +22,7 @@ the Publisher when it creates the Backlog card; a human ticks the checklist.
 
 ```
 Provider: <name> (<Display Name>)
-Kind: native | bridged from <upstream>@<version>
+Kind: native | bridged from <upstream>@<version>   (bridged = a static bridge the maintainer chose to publish)
 Monorepo path: pulumi/autoregistry lib/providers/<name>
 Target repo: pulumi-labs/pulumi-<name> (not created | created, empty | imported)
 Go module: github.com/pulumi-labs/pulumi-<name>
