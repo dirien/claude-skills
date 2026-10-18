@@ -10,7 +10,8 @@ everything that is specific to the examples:
   repository is never modified: compile_ts, compile_python / import_python, compile_csharp, compile_java
   (Go lives in verify.go_examples, shared with the readiness profile);
 - failure_report(): the stable failure keys `<provider>:<check>:<relative path>` the ratchet in
-  .github/scripts/provider-examples.py compares against .github/provider-examples-baseline.json.
+  .github/scripts/provider-examples.py compares against the provider's baseline shard,
+  .github/provider-examples-baseline/<provider>.json.
 
 Standard library only. Every function that runs a command takes the verify.Gate, so logs and timeouts are the
 gate's.
