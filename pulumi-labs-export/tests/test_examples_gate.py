@@ -71,7 +71,7 @@ class RewriteTest(unittest.TestCase):
         self.assertNotIn("<Version>", eg.csproj_rewrite(multi, "Pulumi.Clerk", "/x.csproj"))
 
     POM = ('<project xmlns="http://maven.apache.org/POM/4.0.0"><properties><maven.compiler.source>17</maven.compiler.source>'
-           '<pv>[3.0,4.0)</pv></properties><dependencies>'
+           '<pv>1.1.0</pv></properties><dependencies>'
            '<dependency><groupId>com.pulumi</groupId><artifactId>pulumi</artifactId><version>${pv}</version></dependency>'
            '<dependency><groupId>com.pulumi</groupId><artifactId>clerk</artifactId><version>[0.1,1.0)</version></dependency>'
            '<dependency><groupId>junit</groupId><artifactId>junit</artifactId><version>4.13</version><scope>test</scope></dependency>'
@@ -79,9 +79,9 @@ class RewriteTest(unittest.TestCase):
 
     def test_pom_to_gradle_swaps_the_sdk_for_the_local_jar(self):
         info = eg.pom_info(self.POM)
-        self.assertEqual(info["deps"][0], ("com.pulumi", "pulumi", "[3.0,4.0)", "compile"))
+        self.assertEqual(info["deps"][0], ("com.pulumi", "pulumi", "1.1.0", "compile"))
         gradle = eg.gradle_for_pom(info, {"clerk"}, "/sdk/clerk.jar")
-        self.assertIn("implementation 'com.pulumi:pulumi:[3.0,4.0)'", gradle)
+        self.assertIn("implementation 'com.pulumi:pulumi:1.1.0'", gradle)
         self.assertNotIn("com.pulumi:clerk", gradle)
         self.assertIn("testImplementation 'junit:junit:4.13'", gradle)
         self.assertIn("implementation files('/sdk/clerk.jar')", gradle)
