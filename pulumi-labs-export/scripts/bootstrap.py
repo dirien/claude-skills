@@ -14,18 +14,22 @@ tool's version; progress goes to stderr:
     eval "$(python3 scripts/bootstrap.py)"      # or copy the export line
 
 It is idempotent (tools already at the pinned version are skipped), verifies
-every download by SHA-256, exits 1 with a precise message on any failure and
-never prints environment variables or tokens. See references/toolchain.md.
+every download by SHA-256, retries transient download failures with backoff,
+exits 1 with a precise message on any failure and never prints environment
+variables or tokens. `--cache-key` prints a hash of the pins for a CI cache of
+<prefix>/opt and <prefix>/bin. See references/toolchain.md.
 """
 import argparse
 import dataclasses
 import hashlib
+import http.client
 import io
 import glob
 import json
 import os
 import platform
 import posixpath
+import random
 import re
 import shutil
 import subprocess
@@ -70,6 +74,17 @@ NODE_VERSION = "22.23.3"          # Node.js 22 "Jod" LTS
 DOTNET_SDK_VERSION = "8.0.426"    # .NET SDK 8.0 (net6.0 projects build via the auto-downloaded targeting pack)
 TEMURIN_VERSION = "17.0.20.1+1"   # release tag jdk-17.0.20.1+1
 GRADLE_VERSION = "9.8.1"          # Gradle 9.x needs JVM 17+
+
+# Downloads: attempts in all, and the exponential backoff with jitter between them (seconds,
+# see backoff_delay). NO_RETRY_HTTP codes are final; every other failure is retried.
+DOWNLOAD_ATTEMPTS = 5
+BACKOFF_BASE = 4.0
+BACKOFF_CAP = 60.0
+NO_RETRY_HTTP = (401, 403, 404, 407, 451)
+
+# Bump when the layout under <prefix>/opt or <prefix>/bin changes, so CI caches keyed on
+# `--cache-key` are not reused across layouts.
+CACHE_LAYOUT = 1
 
 CORE_TOOLS = ["go", "pulumi", "jq", "gitleaks", "make"]
 EXTRA_TOOLS = ["node", "dotnet", "java", "gradle"]
@@ -188,6 +203,22 @@ def tool_specs(arch, pulumi_version):
     }
 
 
+def cache_key(specs, names, arch):
+    """Return a 16-hex-digit hash of everything that decides what installing `names` puts under
+    <prefix>/opt and <prefix>/bin: each tool's Spec (version, URL, pinned hash or checksum URL,
+    unpack rules, links), the make .deb pin, the arch and CACHE_LAYOUT. No network, no files.
+
+    CI keys its cache of <prefix>/opt and <prefix>/bin on it, so a pin bump starts a fresh cache.
+    """
+    pins = {"layout": CACHE_LAYOUT, "arch": arch}
+    for name in names:
+        if name == "make":
+            pins["make"] = [MAKE_DEB_VERSION, MAKE_DEB_SHA256.get(arch)]
+        else:
+            pins[name] = dataclasses.asdict(specs[name])
+    return hashlib.sha256(json.dumps(pins, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def make_deb_plan(arch):
     """Return (url, sha256) of the pinned Debian bookworm make .deb for arch."""
     if arch not in MAKE_DEB_SHA256:
@@ -303,11 +334,47 @@ def _clean(s, limit=200):
     return s[:limit]
 
 
-def download(url, dest, retries=3, timeout=120):
-    """Download url to dest (via dest + '.part'); retry transient errors."""
+def backoff_delay(attempt, retry_after=None, rand=random.random):
+    """Seconds to wait after failed attempt `attempt` (0-based) before the next one.
+
+    Exponential (BACKOFF_BASE * 2**attempt, capped at BACKOFF_CAP) with equal jitter: a uniform
+    value between half and all of it, so parallel CI jobs do not retry in lockstep. A numeric
+    Retry-After (seconds) from a 429 or 503 raises the wait to that value, also capped.
+    """
+    d = min(BACKOFF_CAP, BACKOFF_BASE * (2 ** attempt))
+    d = d / 2 + rand() * d / 2
+    if retry_after is not None:
+        d = max(d, min(BACKOFF_CAP, retry_after))
+    return d
+
+
+def _retry_after(err):
+    """Return the numeric Retry-After of an HTTPError in seconds, or None."""
+    try:
+        value = err.headers.get("Retry-After") if err.headers is not None else None
+        return max(0.0, float(value)) if value is not None else None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _stderr(s):
+    print(s, file=sys.stderr, flush=True)
+
+
+def download(url, dest, retries=DOWNLOAD_ATTEMPTS, timeout=120, log=None, sleep=None):
+    """Download url to dest (via dest + '.part'), retrying transient failures.
+
+    Up to `retries` attempts in all. HTTP 5xx, 429 and any other status not in NO_RETRY_HTTP,
+    timeouts, connection resets and truncated bodies are retried after backoff_delay() (exponential,
+    with jitter, honoring Retry-After). NO_RETRY_HTTP (401, 403, 404, 407, 451) fails at once.
+    Each retry is logged (to stderr by default).
+    """
+    log = log or _stderr
+    sleep = sleep or time.sleep
     host = urllib.parse.urlsplit(url).hostname
     last = ""
     for attempt in range(retries):
+        retry_after = None
         req = urllib.request.Request(url, headers={"User-Agent": "pulumi-labs-export-bootstrap"})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r, open(dest + ".part", "wb") as f:
@@ -319,21 +386,27 @@ def download(url, dest, retries=3, timeout=120):
                 body = _clean(e.read(400).decode("utf-8", "replace"))
             except Exception:
                 body = ""
-            if e.code in (401, 403, 404, 407, 451):
+            finally:
+                e.close()
+            if e.code in NO_RETRY_HTTP:
                 raise BootstrapError("download of %s refused by %s: HTTP %d %s (not retrying)"
                                      % (url, host, e.code, body))
             last = "HTTP %d" % e.code
-        except (urllib.error.URLError, OSError) as e:
-            last = _clean(str(getattr(e, "reason", e)))
+            retry_after = _retry_after(e)
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as e:
+            last = _clean(str(getattr(e, "reason", e))) or e.__class__.__name__
         if attempt + 1 < retries:
-            time.sleep(2 * (attempt + 1))
+            delay = backoff_delay(attempt, retry_after)
+            log("download of %s: attempt %d of %d failed (%s); retrying in %.1fs"
+                % (url, attempt + 1, retries, last, delay))
+            sleep(delay)
     raise BootstrapError("download of %s from %s failed after %d attempts: %s" % (url, host, retries, last))
 
 
-def fetch_text(url, tmpdir):
+def fetch_text(url, tmpdir, log=None):
     """Download a small text file and return its contents."""
     path = os.path.join(tmpdir, "fetch-" + hashlib.sha1(url.encode()).hexdigest()[:8])
-    download(url, path)
+    download(url, path, log=log)
     with open(path, encoding="utf-8", errors="replace") as f:
         return f.read()
 
@@ -624,10 +697,10 @@ def install_spec(spec, prefix, log):
         if spec.sha256:
             expected, source = spec.sha256, "pinned in bootstrap.py"
         else:
-            text = fetch_text(spec.checksums_url, tmp)
+            text = fetch_text(spec.checksums_url, tmp, log)
             expected = expected_hash(spec, text)
             source = spec.checksums_url
-        download(spec.url, archive)
+        download(spec.url, archive, log=log)
         verify_hash(archive, expected, spec.hash_algo, spec.filename)
         log("%s: %s ok (%s)" % (spec.filename, spec.hash_algo.upper().replace("SHA", "SHA-"), source))
         stage = os.path.join(tmp, "stage")
@@ -689,7 +762,7 @@ def install_make(prefix, arch, log):
         log("make: downloading pinned Debian package %s" % url)
         try:
             deb = os.path.join(tmp, "make.deb")
-            download(url, deb)
+            download(url, deb, log=log)
             verify_sha256(deb, sha, os.path.basename(url))
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             deb_extract_file(deb, "usr/bin/make", dest)
@@ -939,6 +1012,9 @@ def main(argv=None, out=None, err=None):
     ap.add_argument("--check", action="store_true",
                     help="report what is installed and at which version; download nothing; "
                          "exit 1 if anything is missing or at the wrong version")
+    ap.add_argument("--cache-key", action="store_true",
+                    help="print a hash of the pins of the selected tools (for a CI cache of <prefix>/opt and "
+                         "<prefix>/bin) and exit; downloads nothing")
     ap.add_argument("--only", choices=TOOL_ORDER, help="act on a single tool (overrides --profile)")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="full",
                     help="minimal = go, pulumi, jq, gitleaks, make; full (default) adds node, dotnet, java, gradle")
@@ -953,6 +1029,9 @@ def main(argv=None, out=None, err=None):
     except BootstrapError as e:
         err("bootstrap: error: %s" % e)
         return 1
+    if args.cache_key:
+        out(cache_key(specs, [n for n in PROFILES[args.profile] if not args.only or n == args.only], arch))
+        return 0
     if args.check:
         return 0 if run_check(prefix, specs, args.only, out, args.profile) else 1
 
