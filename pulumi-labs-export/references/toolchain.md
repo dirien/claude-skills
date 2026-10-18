@@ -14,6 +14,7 @@ eval "$(python3 scripts/bootstrap.py)"        # or install and apply in one go
 python3 scripts/bootstrap.py --check          # report only, no downloads; exit 1 if anything is missing
 python3 scripts/bootstrap.py --only gitleaks  # a single tool (go, pulumi, jq, gitleaks, make, node, dotnet, java, gradle)
 python3 scripts/bootstrap.py --profile minimal  # skip node, dotnet, java, gradle
+python3 scripts/bootstrap.py --cache-key      # hash of the pins (honors --profile/--only); no downloads
 ```
 
 Each shell session needs the PATH line (`export PATH="<prefix>/bin:$PATH"`) and
@@ -61,6 +62,27 @@ unpacked.
 restores the net6.0 targeting pack on demand (an end-of-support warning is
 expected). Downloads use concrete file URLs; the bare CDN roots answer HTTP 400,
 which is normal. An unreachable host fails with the URL, host and HTTP status.
+
+## Retries
+
+Every download (archives and checksum files) gets 5 attempts. HTTP 5xx, 429,
+timeouts, connection resets and truncated bodies are retried after an
+exponential backoff with jitter (about 2-4s, 4-8s, 8-16s, 16-32s; a numeric
+`Retry-After` raises the wait, capped at 60s), and each retry is logged to
+stderr. HTTP 401, 403, 404, 407 and 451 fail at once: a refusal or a missing
+file does not get better by waiting.
+
+## Caching the toolchain (CI)
+
+`--cache-key` prints a 16-hex-digit hash of everything that decides what lands
+in `opt/` and `bin/`: each tool's version, URL, pinned hash or checksum URL and
+unpack rules, the make pin and the arch. Cache `<prefix>/opt` and
+`<prefix>/bin` under it (plus the OS); do not cache `gradle-home`,
+`nuget-packages` or `reports`, which fill up per project. After a restore,
+run `bootstrap.py` as usual: tools whose version probe matches the pin are
+skipped without a download, and anything missing or at another version is
+downloaded and SHA-verified. In pulumi/autoregistry the
+`.github/actions/labs-toolchain` action does this for every workflow.
 
 ## make without root or a compiler
 

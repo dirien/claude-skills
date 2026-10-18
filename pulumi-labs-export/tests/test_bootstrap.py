@@ -1,9 +1,12 @@
+import http.client
 import io
 import json
 import os
+import socket
 import stat
 import tarfile
 import unittest
+import urllib.error
 from unittest import mock
 
 import helpers
@@ -504,6 +507,132 @@ class CheckTest(helpers.TempDirMixin, unittest.TestCase):
     def test_path_line_quotes(self):
         self.assertEqual(bootstrap.path_line("/h/x"), 'export PATH="/h/x/bin:$PATH"')
         self.assertIn('\\$', bootstrap.path_line("/h/$x"))
+
+
+class FakeUrlopen:
+    """Stand-in for urllib.request.urlopen: each call pops the next outcome (an exception or bytes)."""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = 0
+
+    def __call__(self, req, timeout=None):
+        self.calls += 1
+        o = self.outcomes.pop(0)
+        if isinstance(o, BaseException):
+            raise o
+        return io.BytesIO(o)
+
+
+def http_error(code, headers=None):
+    return urllib.error.HTTPError("https://example.invalid/f", code, "status %d" % code, headers or {},
+                                  io.BytesIO(b"upstream says no"))
+
+
+class DownloadRetryTest(helpers.TempDirMixin, unittest.TestCase):
+    def fetch(self, outcomes, **kw):
+        fake, sleeps, logs = FakeUrlopen(outcomes), [], []
+        dest = os.path.join(self.tmp, "f")
+        with mock.patch.object(bootstrap.urllib.request, "urlopen", fake):
+            try:
+                bootstrap.download("https://example.invalid/f", dest, log=logs.append, sleep=sleeps.append, **kw)
+                err = None
+            except bootstrap.BootstrapError as e:
+                err = str(e)
+        return fake, sleeps, logs, err, dest
+
+    def test_transient_failures_then_success(self):
+        fake, sleeps, logs, err, dest = self.fetch(
+            [http_error(504), http_error(503), http_error(429), ConnectionResetError(104, "reset by peer"), b"payload"])
+        self.assertIsNone(err)
+        self.assertEqual(fake.calls, 5)
+        with open(dest, "rb") as f:
+            self.assertEqual(f.read(), b"payload")
+        self.assertFalse(os.path.exists(dest + ".part"))
+        self.assertEqual(len(sleeps), 4)
+        # exponential with equal jitter: attempt n (0-based) waits between half and all of BASE * 2**n
+        for n, d in enumerate(sleeps):
+            full = min(bootstrap.BACKOFF_CAP, bootstrap.BACKOFF_BASE * 2 ** n)
+            self.assertGreaterEqual(d, full / 2)
+            self.assertLessEqual(d, full)
+        self.assertIn("attempt 1 of 5 failed (HTTP 504)", logs[0])
+
+    def test_gives_up_after_five_attempts(self):
+        outcomes = [socket.timeout("timed out"), http.client.IncompleteRead(b"x", 10),
+                    urllib.error.URLError(ConnectionResetError(104, "reset")), http_error(500), http_error(502)]
+        fake, sleeps, logs, err, _ = self.fetch(outcomes)
+        self.assertEqual(fake.calls, 5)
+        self.assertEqual(len(sleeps), 4)
+        self.assertIn("failed after 5 attempts: HTTP 502", err)
+
+    def test_refusals_are_not_retried(self):
+        for code in (401, 403, 404, 407, 451):
+            fake, sleeps, logs, err, _ = self.fetch([http_error(code), b"never"])
+            self.assertEqual(fake.calls, 1, code)
+            self.assertEqual(sleeps, [], code)
+            self.assertIn("HTTP %d upstream says no (not retrying)" % code, err)
+
+    def test_retry_after_is_honored_and_capped(self):
+        _, sleeps, _, err, _ = self.fetch([http_error(429, {"Retry-After": "30"}), b"ok"])
+        self.assertIsNone(err)
+        self.assertGreaterEqual(sleeps[0], 30)
+        _, sleeps, _, _, _ = self.fetch([http_error(503, {"Retry-After": "86400"}), b"ok"])
+        self.assertLessEqual(sleeps[0], bootstrap.BACKOFF_CAP)
+        _, sleeps, _, _, _ = self.fetch([http_error(503, {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}), b"ok"])
+        self.assertLessEqual(sleeps[0], bootstrap.BACKOFF_BASE)
+
+    def test_backoff_delay_bounds(self):
+        self.assertEqual(bootstrap.backoff_delay(0, rand=lambda: 0.0), bootstrap.BACKOFF_BASE / 2)
+        self.assertEqual(bootstrap.backoff_delay(0, rand=lambda: 1.0), bootstrap.BACKOFF_BASE)
+        self.assertEqual(bootstrap.backoff_delay(3, rand=lambda: 1.0), bootstrap.BACKOFF_BASE * 8)
+        self.assertEqual(bootstrap.backoff_delay(20, rand=lambda: 1.0), bootstrap.BACKOFF_CAP)
+        self.assertEqual(bootstrap.backoff_delay(0, retry_after=12, rand=lambda: 0.0), 12)
+
+    def test_install_passes_the_log_to_download(self):
+        spec = bootstrap.tool_specs("amd64", "3.241.0")["jq"]
+        seen, progress = [], []
+
+        def fake_download(url, dest, log=None, **kw):
+            seen.append(log)
+            raise bootstrap.BootstrapError("stop")
+        with mock.patch.object(bootstrap, "download", fake_download):
+            with self.assertRaises(bootstrap.BootstrapError):
+                bootstrap.install_spec(spec, os.path.join(self.tmp, "p"), progress.append)
+        self.assertEqual(seen, [progress.append])
+        self.assertIn("jq 1.8.2: downloading", progress[0])
+
+
+class CacheKeyTest(unittest.TestCase):
+    def key(self, arch="amd64", pulumi="3.241.0", names=None):
+        specs = bootstrap.tool_specs(arch, pulumi)
+        return bootstrap.cache_key(specs, names or bootstrap.PROFILES["full"], arch)
+
+    def test_stable_and_short(self):
+        self.assertEqual(self.key(), self.key())
+        self.assertRegex(self.key(), r"^[0-9a-f]{16}$")
+
+    def test_changes_with_pins_arch_profile_and_layout(self):
+        base = self.key()
+        self.assertNotEqual(base, self.key(pulumi="3.242.0"))
+        self.assertNotEqual(base, self.key(arch="arm64"))
+        self.assertNotEqual(base, self.key(names=bootstrap.PROFILES["minimal"]))
+        with mock.patch.object(bootstrap, "GITLEAKS_VERSION", "8.30.2"):
+            self.assertNotEqual(base, self.key())
+        with mock.patch.object(bootstrap, "MAKE_DEB_VERSION", "4.3-4.2"):
+            self.assertNotEqual(base, self.key())
+        with mock.patch.object(bootstrap, "CACHE_LAYOUT", bootstrap.CACHE_LAYOUT + 1):
+            self.assertNotEqual(base, self.key())
+
+    def test_cli_prints_the_key_without_network(self):
+        lines = []
+        with mock.patch.object(bootstrap, "download", side_effect=AssertionError("network used")), \
+                mock.patch.object(bootstrap.sys, "platform", "linux"), \
+                mock.patch.object(bootstrap, "detect_arch", return_value="amd64"):
+            rc = bootstrap.main(["--cache-key", "--prefix", "/nonexistent/p"], out=lines.append, err=lines.append)
+        self.assertEqual(rc, 0)
+        self.assertEqual(lines, [bootstrap.cache_key(bootstrap.tool_specs("amd64", bootstrap.read_pulumi_version()),
+                                                     bootstrap.PROFILES["full"], "amd64")])
+        self.assertFalse(os.path.exists("/nonexistent/p"))
 
 
 if __name__ == "__main__":
