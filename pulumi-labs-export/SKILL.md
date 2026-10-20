@@ -1,6 +1,6 @@
 ---
 name: pulumi-labs-export
-description: Mirror a provider (native pulumi-go-provider or Terraform-bridged) from the private pulumi/autoregistry monorepo (lib/providers/<provider>/, stays the source of truth) into a generated public pulumi-labs/pulumi-<provider> repo, and re-sync it on every new version. Use when asked to export, carve out, publish, release or onboard an autoregistry provider to pulumi-labs, to run the pre-push/pre-release gate on such a repo, or to file the npm/PyPI/NuGet/Maven/ESC onboarding issues for one. Covers fixed package naming, the access check, the deterministic export.py and drift check, the sync flow, vendored archetype scaffolding rendered by script (never hand-copied), the verification gate (builds all five SDKs, default-provider and credential checks, nothing is pushed without a passing report), secret scan (`secret_scan.py`, full history plus tree), the identity-switch helper (`identity.py`), and the experimental 0.x.y rules, and the bridged archetype for Terraform-bridged providers (`references/bridged.md`).
+description: Mirror a provider (native pulumi-go-provider or Terraform-bridged) from the private pulumi/autoregistry monorepo (lib/providers/<provider>/, stays the source of truth) into a generated public pulumi-labs/pulumi-<provider> repo, and re-sync it on every new version. Use when asked to export, carve out, publish, release or onboard an autoregistry provider to pulumi-labs, to run the pre-push/pre-release gate on such a repo, or to file the npm/PyPI/NuGet/Maven/ESC onboarding issues for one. Covers fixed package naming, the access check, the deterministic export.py and drift check, the sync flow, vendored archetype scaffolding rendered by script (never hand-copied), the verification gate (builds all five SDKs, default-provider and credential checks, nothing is pushed without a passing report), secret scan (`secret_scan.py`, full history plus tree), repository setup through `repo_setup.sh plan` when the run's identity is a pulumi-labs admin, the identity-switch helper (`identity.py`), and the experimental 0.x.y rules, and the bridged archetype for Terraform-bridged providers (`references/bridged.md`).
 ---
 
 # Autoregistry Publisher: pulumi-labs export
@@ -31,10 +31,9 @@ without breaking customers.
 All scripts are Python 3 standard library plus `gh` and `git` (`archetype_drift.py`, `export.py` and `identity.py` never call `gh` or the network; `export.py --generate` runs `make`, which downloads Go modules). Run them as
 `python3 scripts/<x>.py` from this skill's folder; every one has `--help`
 and exits non-zero with an exact message. Details live in `references/`. `scripts/repo_setup.sh` is the one exception to
-"all scripts are Python": a bash script for humans only (never run it).
-
-The canonical copy of this skill lives in `pulumi/autoregistry`
-(`skills/pulumi-labs-export`); this repo mirrors it.
+"all scripts are Python": a bash script whose `create`, `protect` and `verify`
+are for humans only (never run them); you run only its `plan` (see
+"Repository setup").
 
 ## Naming (fixed, never deviate)
 
@@ -125,13 +124,73 @@ A 404 on a private repo means no access, not a missing repo, unless you
 can confirm otherwise. If any probe fails: stop, report the exact
 endpoint and status, and note that credentials are fixed per session (a
 fix may need a new session). Never search for, print, or swap
-credentials. If the target repo does not exist, you cannot create it;
-file an issue asking a pulumi-labs admin to create it and grant the
-Workprentice app push. **`scripts/repo_setup.sh` is for humans only. You
-never run it, and you never create, configure, protect or delete a
-repository.** It exists so Engin can create the empty public repo with the
-right settings (`references/repo-setup.md`). The repo must be empty (no
-README); a repo with commits you did not push is a stop-and-escalate.
+credentials. If the target repo does not exist, or exists without its
+settings, follow "Repository setup" below: with an admin identity you set it
+up yourself through the plan; otherwise file an issue asking a pulumi-labs
+admin to create or configure it and grant the Workprentice app push, and
+stop. The repo must be empty (no README) before the initial export; a repo
+with commits you did not push is a stop-and-escalate.
+
+## Repository setup (admin identity only)
+
+`scripts/repo_setup.sh create`, `protect` and `verify` are for humans
+(`references/repo-setup.md`); you never run them. You may set up the one
+repo of the current card yourself, only through `scripts/repo_setup.sh plan`,
+and only when this run's identity is an admin. Find out with:
+
+```
+python3 scripts/access_check.py --print-commands --admin --provider <provider>
+```
+
+- The admin probe (the line after the PASS rule) answers 200: you are an
+  admin of `pulumi-labs/pulumi-<provider>`. Use the plan.
+- The target repo does not exist (404 on the third probe): run
+  `plan create`. Its first check answers 404, and the comment above it gives
+  the create call: run that once. If it fails, you cannot create repos.
+- Anything else (403 or 404 on the admin probe, a failed create, a `STOP`
+  line, a `RUN` command that fails): file the repository ask on
+  `pulumi/platform-providers-team` (see Ticketing) and stop.
+
+`plan` changes nothing, calls nothing and needs no terminal or
+credentials. It writes the request bodies under
+`$HOME/.local/pulumi-labs-export/repo-setup/` and prints read-only `gh api`
+checks, with the rules for running them at the top:
+
+```
+bash scripts/repo_setup.sh plan create <provider>
+```
+
+Run each printed line as its own direct `gh` command (no pipes, no
+redirects). A check prints `ok` when a setting is right, or `fix ...` and
+then `RUN <command>` (`TRY` for a best-effort setting): run that command at
+once, as its own command. `CHECK <command>` is one more read; `STOP` ends the
+setup. The output's header has the exact rules. Repeat the pass until it
+prints no `RUN` (at most four passes). The checks read the live repo, so a
+re-run after a partial failure does only what is left.
+
+1. Before the initial export: `plan create <provider>`, then
+   `plan verify <provider>`: every line ran and none printed `FAIL`.
+2. After the initial push of `main` and a green `test` run:
+   `plan protect <provider>`, then `plan verify <provider> --imported`: no `FAIL`.
+
+Limits. An admin token can do far more than this; you never do it:
+
+- Only `pulumi-labs/pulumi-<provider>` for the provider of the current
+  card. Never pass `--org` or another slug.
+- For repository setup, only the commands the plan prints, exactly as
+  printed: no other `gh repo` command or settings call, and never edit the
+  bodies.
+- Never delete, rename, transfer, archive or unarchive a repository, and
+  never change its visibility.
+- Never create, move or delete a tag, never create a release, and never
+  approve, reject or re-run a deployment or a release workflow run.
+- Never use admin bypass, although your identity has it: the rulesets let
+  admins push `v*` tags past "Release tags: people only" and merge a pull
+  request without a green `test` past "Default branch: PR only". Merge only
+  with Reviewer clearance and a green `test` on the exact head SHA, never
+  merge with `--admin`, and never push to `main` after the initial export.
+- Never touch the settings, rulesets, environments or app installations of
+  any other repository or of the org.
 
 ## The mirror model
 
@@ -225,12 +284,15 @@ typed by hand. Do it in this order:
    entry.
 4. `identity.py --check` until it prints no hits.
 
-**c. Initial export.** Full non-shallow unfiltered clone of the monorepo,
+**c. Initial export.** The target repo is set up and empty (with an admin
+identity: "Repository setup" step 1). Full non-shallow unfiltered clone of the monorepo,
 `git subtree split --prefix=lib/providers/<p>` to keep history, pull it into
 the empty mirror clone, run `export.py --out . --generate`, commit as
 `Export pulumi/autoregistry@<sha>`. Then `scripts/secret_scan.py` (gitleaks over the full history and the
 tree), `verify.py`, `verify.py --assert-pushable`, push `main` (the one allowed
-direct push), wait for the `test` workflow to go green, and open a monorepo
+direct push), wait for the `test` workflow to go green, protect the default
+branch ("Repository setup" step 2 with an admin identity; otherwise tell Engin
+it is ready for `repo_setup.sh protect`), and open a monorepo
 PR setting `exportedAt`, `lastSyncedCommit`, `lastSyncedVersion`.
 
 **d. Onboarding issues.** `scripts/onboarding.py` (below). Do not ask for a

@@ -1,11 +1,13 @@
-# Repository setup (humans only)
+# Repository setup
 
-> **HUMANS ONLY.** An org admin runs this, once per provider, before the card is
-> approved. The Autoregistry Publisher and every other agent must NEVER create,
-> configure, protect, make public or delete a repository, and must never run
-> `scripts/repo_setup.sh`. The script refuses to run without an interactive
-> terminal. If a repo is missing or misconfigured, the agent files the ask and
-> stops (see "Access check" in SKILL.md).
+> `scripts/repo_setup.sh create`, `protect` and `verify` are **for humans**: an
+> org admin runs them, once per provider, and they refuse to run without an
+> interactive terminal. No agent runs them. The Autoregistry Publisher may set up
+> the one repository of the provider it is carving, through
+> `scripts/repo_setup.sh plan` only, and only when its pulumi-labs identity is an
+> admin ("The agent path" below; "Repository setup" in SKILL.md). Otherwise it
+> files the ask and stops. No agent ever deletes, renames, transfers or archives a
+> repository, changes its visibility, tags, or uses admin bypass.
 
 `scripts/repo_setup.sh` does what is below with `gh`; this page says why each
 setting exists and what to do by hand when the script cannot.
@@ -24,6 +26,10 @@ setting exists and what to do by hand when the script cannot.
 
 Protection comes after the import because the initial import is the one direct
 push to `main`; a pull-request-only rule would block it.
+
+With the admin connection (below) the Publisher does steps 2, 4 and 7 itself with
+`plan create`, `plan verify`, `plan protect` and `plan verify --imported`, after the
+card is approved; step 3 stays with a human.
 
 ## What the script sets
 
@@ -71,6 +77,73 @@ and Workflows (read and write), and no Administration.
   `workprentice[bot]` as the actor. The Publisher must still confirm the `test`
   run exists for the import commit and escalate if none starts within 10
   minutes.
+
+## The agent path (`plan`)
+
+The Workprentice runtime gives credentials only to a `gh` or `git` the agent runs
+directly (`runtime.md`), so a script cannot make the API calls for it. `plan`
+therefore calls nothing. It writes the request bodies (the same ones `create` and
+`protect` send) to `$HOME/.local/pulumi-labs-export/repo-setup/pulumi-<slug>/` and
+prints one read-only `gh api` GET per setting. Each GET carries a `--jq` program
+that compares the live value with the body and prints `ok`, or `fix <what>` and the
+exact write: `RUN <command>`, or `TRY <command>` for the three settings `create`
+treats as best effort (fork-PR approval, private vulnerability reporting, Dependabot
+security updates off). Ruleset contents need a second read by id, which the check
+prints as `CHECK <command>`. A `# on HTTP <code>:` comment says what an error status
+means (404 on the repo: create it; 409 on commits: empty). Because every pass reads
+the live repo, a pass after a partial failure prints only what is left, and a
+configured repo prints only `ok`. `plan verify` prints PASS, FAIL and NOTE instead.
+
+`plan` refuses more than one slug, any org but `pulumi-labs`, and prints `STOP`
+instead of a write when the repo is archived or not public, when its security
+settings are not visible (not an admin), when it already has commits before the
+import, when an environment has deployment policies the script did not make, or
+when two rulesets share a name. It never prints a delete of a repository, a
+visibility change, a tag or a bypass actor beyond the bodies.
+
+First pass of `plan create modal` against the empty `pulumi-labs/pulumi-modal`
+(2026-10-18; read-only, nothing was run): it printed `fix` lines and RUN for the
+general settings (merge methods, wiki, projects, update branch, delete branch on
+merge, squash message, secret scanning, push protection), the workflow token (write
+to read, no PR approvals) and the three environments, TRY for fork-PR approval and
+private vulnerability reporting, and RUN for the tag ruleset. Actions, Dependabot
+alerts and security updates printed `ok`.
+
+### The admin identity
+
+Plan: a fine-grained personal access token owned by the pulumi-labs org, access to
+all its repositories, about 90 days, with repository permissions Administration,
+Contents, Workflows, Pull requests, Issues and Actions (read and write) and Metadata
+(read), set as a per-agent override of the Publisher's pulumi-labs GitHub
+connection. Everything in the `pulumi` org stays on the workprentice App. Calls made
+with it act as the token's owner (Engin), so mirror PRs, merges and comments by the
+Publisher show as Engin, and the rulesets' admin bypass applies to it.
+
+Fine-grained permission each call of the plan needs (GitHub REST docs, 2026-10-18),
+and whether that token has it:
+
+| Call | Needs | Token |
+|---|---|---|
+| `GET /repos/{o}/{r}` | Metadata read; the `security_and_analysis` block is shown only to a repository admin (docs name the role, not a token permission) | yes |
+| `GET .../commits`, `GET .../contents/{path}` | Contents read | yes |
+| `GET .../actions/permissions`, `.../workflow`, `.../fork-pr-contributor-approval` | Administration read | yes |
+| `GET .../vulnerability-alerts`, `GET .../automated-security-fixes` | Administration read | yes |
+| `GET .../private-vulnerability-reporting`, `GET .../rulesets`, `GET .../rulesets/{id}` | Metadata read | yes |
+| `GET .../environments`, `GET .../environments/{env}/deployment-branch-policies` | Actions read | yes |
+| `GET /orgs/{org}/installations` (verify) | organization Administration read | **no**: verify prints a NOTE |
+| `POST /orgs/{org}/repos` | Administration write, or Repository creation write | yes |
+| `PATCH /repos/{o}/{r}` | Administration write; `security_and_analysis` also needs the admin role | yes |
+| `PUT .../actions/permissions`, `.../workflow`, `.../fork-pr-contributor-approval` | Administration write | yes |
+| `PUT .../vulnerability-alerts`, `DELETE .../automated-security-fixes`, `PUT .../private-vulnerability-reporting` | Administration write | yes |
+| `PUT .../environments/{env}`, `POST .../deployment-branch-policies` | Administration write | yes |
+| `POST .../rulesets`, `PUT .../rulesets/{id}` | Administration write | yes |
+
+The same token can also delete any pulumi-labs repository, change its name,
+visibility or archive state (Administration write), create tags and releases
+(Contents write), and re-run or dispatch workflows (Actions write). It cannot
+transfer a repository (the REST endpoint accepts only GitHub App user tokens) or
+approve a deployment (Deployments write is not granted). The skill's limits cover
+everything it can do and the plan does not.
 
 ## Verifying by hand
 

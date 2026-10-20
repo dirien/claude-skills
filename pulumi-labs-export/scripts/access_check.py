@@ -25,6 +25,17 @@ GitHub rejects at the receive-pack advertisement when pushing is not allowed.
 
 Creating an issue cannot be probed without creating one. Treat a 403 on the
 first real `gh issue create` as the failure and report it.
+
+    python3 scripts/access_check.py --admin --provider modal
+
+`--admin` (repository setup only) adds one informational probe that is not
+part of the PASS rule: GET /repos/pulumi-labs/pulumi-<provider>/actions/permissions.
+Only a repository admin can read it (fine-grained permission "Administration"
+read; the Workprentice App has no Administration permission). 200 means this
+identity is an admin and may set the repo up through `repo_setup.sh plan`
+(SKILL.md, "Repository setup"); 403 or 404 means it is not. For a missing repo
+no read can show whether this identity may create it: the create call that
+`repo_setup.sh plan create` prints is that probe.
 """
 import argparse
 import json
@@ -80,8 +91,13 @@ def probe_commands(provider, tmpdir):
     ]
 
 
-def print_commands(provider, tmpdir=None, out=None):
-    """Print the probe commands, one per line, plus the PASS rule as # comments."""
+def admin_probe_endpoint(provider):
+    """The read only a repository admin can make (Actions settings need the Administration permission)."""
+    return "/repos/pulumi-labs/pulumi-%s/actions/permissions" % provider
+
+
+def print_commands(provider, tmpdir=None, out=None, admin=False):
+    """Print the probe commands, one per line, plus the PASS rule as # comments (and the admin probe if asked)."""
     out = out or sys.stdout
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="access-probe-")
     print("# Run each non-comment line below as its own command (a direct gh or git invocation, not via a shell or script).", file=out)
@@ -89,6 +105,12 @@ def print_commands(provider, tmpdir=None, out=None):
         print(shlex.join(c), file=out)
     print("# PASS rule: every command exits 0, and the push probe output contains no \"denied\" or \"403\".", file=out)
     print("# Read the three gh api responses: the ticket repo must have has_issues true and archived false.", file=out)
+    if admin:
+        print("# Admin probe (repository setup only, not part of the PASS rule):", file=out)
+        print(shlex.join(["gh", "api", admin_probe_endpoint(provider)]), file=out)
+        print("# 200: this identity is an admin of the repo: set it up with `scripts/repo_setup.sh plan` (SKILL.md, \"Repository setup\").", file=out)
+        print("# 403 or 404: it is not, or the repo does not exist: use the issue path. If the third probe returned 404 (no repo),", file=out)
+        print("# no read shows whether this identity may create it: the create call that `repo_setup.sh plan create` prints is that probe.", file=out)
 
 
 def redact(text):
@@ -150,8 +172,8 @@ def probe_push(repo_url, runner=run):
     return rc == 0, "" if rc == 0 else redact(out.strip()[-300:])
 
 
-def run_probes(provider, runner=run):
-    """Return a list of result dicts: name, endpoint, status, ok, detail."""
+def run_probes(provider, runner=run, admin=False):
+    """Return a list of result dicts: name, endpoint, status, ok, detail (info: True for the informational admin probe)."""
     n = names.derive(provider)
     results = []
 
@@ -178,8 +200,9 @@ def run_probes(provider, runner=run):
     exists = st == 200
     detail = ""
     if st == 404:
-        detail = ("target repo not found or not visible; you cannot create it: file an issue on pulumi/platform-providers-team "
-                  "asking a pulumi-labs admin to create %s and grant the Workprentice app push" % n["repo"])
+        detail = ("target repo not found or not visible. Only through `repo_setup.sh plan create` (SKILL.md, \"Repository setup\") "
+                  "may you create it; otherwise file an issue on pulumi/platform-providers-team asking a pulumi-labs admin to "
+                  "create %s and grant the Workprentice app push" % n["repo"])
     elif st != 200:
         detail = "unexpected status"
     add("read target repo", "GET " + ep, st, exists, detail)
@@ -193,6 +216,17 @@ def run_probes(provider, runner=run):
     else:
         add("push to target repo", "git push --dry-run %s HEAD:refs/heads/access-probe" % url, "skipped", False,
             "skipped because the target repo is not readable")
+    if admin:
+        ep = admin_probe_endpoint(provider)
+        if exists:
+            st, _ = gh_get(ep, runner)
+            add("admin on target repo", "GET " + ep, st, True,
+                "yes: this identity may set the repo up with repo_setup.sh plan" if st == 200 else
+                "no: use the issue path for repository setup")
+        else:
+            add("admin on target repo", "GET " + ep, "skipped", True,
+                "the repo does not exist; the create call that repo_setup.sh plan create prints is the probe")
+        results[-1]["info"] = True
     return results
 
 
@@ -201,13 +235,15 @@ def main(argv=None):
     ap.add_argument("--provider", required=True, help="provider slug, e.g. modal")
     ap.add_argument("--print-commands", action="store_true",
                     help="print the probes as direct commands, one per line, instead of running them")
+    ap.add_argument("--admin", action="store_true",
+                    help="also probe whether this identity is an admin of the target repo (repository setup only; informational)")
     args = ap.parse_args(argv)
     try:
         names.validate_slug(args.provider)
         if args.print_commands:
-            print_commands(args.provider)
+            print_commands(args.provider, admin=args.admin)
             return 0
-        results = run_probes(args.provider)
+        results = run_probes(args.provider, admin=args.admin)
     except CredentialsUnavailable as e:
         print("error: %s" % e, file=sys.stderr)
         print("HINT: " + NO_CREDENTIALS_HINT, file=sys.stderr)
@@ -216,7 +252,7 @@ def main(argv=None):
         print("error: %s" % e, file=sys.stderr)
         return 1
     for r in results:
-        print("%s  %-20s %s -> %s%s" % ("PASS" if r["ok"] else "FAIL", r["name"], r["endpoint"], r["status"],
+        print("%s  %-20s %s -> %s%s" % ("INFO" if r.get("info") else "PASS" if r["ok"] else "FAIL", r["name"], r["endpoint"], r["status"],
                                         ("\n      " + r["detail"]) if r["detail"] else ""))
     print("NOTE  issue creation on pulumi/platform-providers-team is NOT probed: it cannot be done without creating an "
           "issue. A 403 on the first real `gh issue create` is the failure; report it and stop.")

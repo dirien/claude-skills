@@ -60,6 +60,27 @@ class AccessCheckTest(unittest.TestCase):
         self.assertEqual(res[2]["status"], 404)
         self.assertEqual(res[3]["status"], "skipped")
 
+    def test_admin_probe_is_informational(self):
+        for admin_status, word in ((200, "yes"), (403, "no")):
+            def runner(cmd, cwd=None, env=None):
+                if cmd[:2] == ["gh", "api"] and cmd[-1].endswith("/actions/permissions"):
+                    return 0, "HTTP/2.0 %d x\r\n\r\n{}" % admin_status
+                return self.fake(200, 0, [])(cmd, cwd, env)
+            res = access_check.run_probes("modal", runner, admin=True)
+            self.assertEqual(len(res), 5)
+            self.assertEqual(res[-1]["endpoint"], "GET /repos/pulumi-labs/pulumi-modal/actions/permissions")
+            self.assertTrue(res[-1]["ok"] and res[-1]["info"])
+            self.assertTrue(res[-1]["detail"].startswith(word), res[-1])
+        self.assertEqual(len(access_check.run_probes("modal", self.fake(200, 0, []))), 4)
+
+    def test_admin_probe_skipped_for_a_missing_repo(self):
+        calls = []
+        res = access_check.run_probes("modal", self.fake(404, 0, calls), admin=True)
+        self.assertEqual(res[-1]["status"], "skipped")
+        self.assertIn("plan create", res[-1]["detail"])
+        self.assertFalse([c for c in calls if c[-1].endswith("/actions/permissions")])
+        self.assertIn("repo_setup.sh plan create", res[2]["detail"])
+
 
 class CredentialDetectionTest(unittest.TestCase):
     def test_print_commands_are_direct_and_shell_free(self):
@@ -84,6 +105,15 @@ class CredentialDetectionTest(unittest.TestCase):
         self.assertIn("PASS rule", text)
         self.assertIn("denied", text)
         self.assertIn("403", text)
+
+    def test_print_commands_admin_adds_one_direct_probe(self):
+        import shlex
+        buf = io.StringIO()
+        access_check.print_commands("modal", "/tmp/probe", buf, admin=True)
+        cmds = [shlex.split(l) for l in buf.getvalue().splitlines() if not l.startswith("#")]
+        self.assertEqual(len(cmds), 7)
+        self.assertEqual(cmds[6], ["gh", "api", "/repos/pulumi-labs/pulumi-modal/actions/permissions"])
+        self.assertIn("not part of the PASS rule", buf.getvalue())
 
     def test_print_commands_flag_runs_nothing(self):
         with mock.patch.object(access_check, "run") as r, mock.patch("sys.stdout", new_callable=io.StringIO) as out:
