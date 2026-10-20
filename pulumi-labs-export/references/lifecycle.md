@@ -32,7 +32,10 @@ Labels: (only if the board cannot hold labels) needs-human, rework, update, brea
 Approval checklist (a human completes this before moving the card to Approved):
 - [ ] Registry name decided and checked free on the Pulumi Registry (a name cannot be undone)
 - [ ] pulumi-labs/pulumi-<name> exists: PUBLIC and EMPTY (no README, license or .gitignore), created and
-      configured with scripts/repo_setup.sh; `repo_setup.sh verify <name>` printed all PASS (link the output)
+      configured with scripts/repo_setup.sh; `repo_setup.sh verify <name>` printed all PASS (link the output).
+      Or: the Publisher's pulumi-labs connection is the admin token, and the Publisher creates (if missing) and
+      configures the repo itself with `repo_setup.sh plan` (SKILL.md, "Repository setup") and records the
+      `plan verify` result on the card
 - [ ] The workprentice app covers the repo (all repositories, or the repo added) with Workflows permission
 - [ ] Provider Readiness passed on current monorepo main: link the `Provider Readiness` workflow run for <name>
 - [ ] Kind is supported by the skill (native and bridged)
@@ -51,7 +54,9 @@ Update approval (a breaking release of a published provider): a human adds "Appr
 
 The Publisher re-checks every line that a script can check (repo exists, empty,
 public; readiness run link is green and recent) and moves the card back to
-Approved with `needs-human` if one is untrue.
+Approved with `needs-human` if one is untrue. With the admin connection a missing
+or unconfigured repo is not untrue: the Publisher sets it up through the plan in
+the export's access step, and only a `STOP` or a failed write sends the card back.
 
 ## Version and CHANGELOG discipline (mirrored providers)
 
