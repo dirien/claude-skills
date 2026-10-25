@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import unittest
 
 import helpers
@@ -458,6 +459,32 @@ class ReportAndPushableTest(helpers.TempDirMixin, unittest.TestCase):
     def test_empty_gate_is_not_a_pass(self):
         report, _, _ = verify.finish_report(verify.Gate(os.path.join(self.tmp, "l"), {}), "repo", self.repo, self.state, {}, "t", self.rd, "x")
         self.assertEqual(report["overall"], "FAIL")
+
+
+class RenderScratchRepoTest(unittest.TestCase):
+    """The monorepo gate builds the SDKs in a scratch repo that must look like the mirror export.py produces."""
+
+    def test_copies_the_provider_readme_next_to_the_rendered_makefile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir, gen = os.path.join(tmp, "lib", "providers", "demo"), os.path.join(tmp, "gen")
+            os.makedirs(pdir)
+            with open(os.path.join(pdir, "README.md"), "w", encoding="utf-8") as f:
+                f.write("# Demo\n\n> Experimental.\n")
+            verify.render_scratch_repo(gen, pdir, "demo")
+            self.assertTrue(os.path.isfile(os.path.join(gen, "Makefile")))
+            with open(os.path.join(gen, "README.md"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), "# Demo\n\n> Experimental.\n")
+            # sdk_fixups packs this README into Pulumi.Labs.<Name>.csproj; without it dotnet pack fails with NU5019.
+            with open(os.path.join(gen, "Makefile"), encoding="utf-8") as f:
+                self.assertIn("cp README.md sdk/dotnet/README.md", f.read())
+
+    def test_provider_without_readme_still_renders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pdir, gen = os.path.join(tmp, "p"), os.path.join(tmp, "gen")
+            os.makedirs(pdir)
+            verify.render_scratch_repo(gen, pdir, "demo")
+            self.assertTrue(os.path.isfile(os.path.join(gen, "Makefile")))
+            self.assertFalse(os.path.exists(os.path.join(gen, "README.md")))
 
 
 if __name__ == "__main__":

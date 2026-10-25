@@ -39,6 +39,67 @@ class ExportBase(helpers.TempDirMixin, unittest.TestCase):
         return str(cm.exception)
 
 
+class RootGoModTest(helpers.TempDirMixin, unittest.TestCase):
+    """Issue #1248: the Go module may sit at lib/providers/<p>/go.mod; the mirror must not change."""
+
+    def export_layout(self, layout, name):
+        root = os.path.join(self.tmp, name)
+        os.makedirs(root)
+        mono = helpers.build_monorepo(root, "demo", layout=layout)
+        out = helpers.build_out(root)
+        export.export(mono, "demo", out, skill_commit=None)
+        return mono, out
+
+    def test_root_layout_exports(self):
+        _, out = self.export_layout("root", "r")
+        with open(os.path.join(out, "go.mod"), encoding="utf-8") as f:
+            self.assertTrue(f.read().startswith("module github.com/pulumi-labs/pulumi-demo\n"))
+        self.assertTrue(os.path.isfile(os.path.join(out, "go.sum")))
+        self.assertFalse(os.path.exists(os.path.join(out, "provider/go.mod")))
+        with open(os.path.join(out, "provider/cmd/pulumi-resource-demo/main.go"), encoding="utf-8") as f:
+            self.assertIn('"github.com/pulumi-labs/pulumi-demo/provider/pkg/provider"', f.read())
+
+    def test_both_layouts_give_identical_mirror(self):
+        mono_r, out_r = self.export_layout("root", "r")
+        mono_n, out_n = self.export_layout("nested", "n")
+        tr, tn = helpers.tree(out_r), helpers.tree(out_n)
+        self.assertEqual(sorted(tr), sorted(tn))
+        differing = [k for k in tr if tr[k] != tn[k]]
+        # only files that record the (differing) source commit may differ
+        for k in differing:
+            self.assertIn(k, ("export.json", ".pulumi-labs-export.json"), k)
+
+    def test_both_go_mods_is_ambiguous(self):
+        root = os.path.join(self.tmp, "b")
+        os.makedirs(root)
+        mono = helpers.build_monorepo(root, "demo", layout="root")
+        helpers.write(mono, "lib/providers/demo/provider/go.mod", "module x\n")
+        helpers.commit_all(mono, "dup")
+        with self.assertRaisesRegex(export.ExportError, r"both go\.mod and provider/go\.mod"):
+            export.export(mono, "demo", helpers.build_out(root), skill_commit=None)
+
+    def test_root_go_mod_with_nested_module_refused(self):
+        root = os.path.join(self.tmp, "w")
+        os.makedirs(root)
+        mono = helpers.build_monorepo(root, "demo", layout="root")
+        p = os.path.join(mono, "lib/providers/demo/go.mod")
+        with open(p, encoding="utf-8") as f:
+            s = f.read()
+        helpers.write(mono, "lib/providers/demo/go.mod", s.replace("providers/demo\n", "providers/demo/provider\n"))
+        helpers.commit_all(mono, "wrong module")
+        with self.assertRaisesRegex(export.ExportError, r"go\.mod declares module .*providers/demo/provider"):
+            export.export(mono, "demo", helpers.build_out(root), skill_commit=None)
+
+    def test_neither_go_mod(self):
+        root = os.path.join(self.tmp, "n0")
+        os.makedirs(root)
+        mono = helpers.build_monorepo(root, "demo", layout="root")
+        os.remove(os.path.join(mono, "lib/providers/demo/go.mod"))
+        helpers.commit_all(mono, "rm")
+        with self.assertRaisesRegex(export.ExportError, r"go\.mod \(or lib/providers/demo/provider/go\.mod\) not found"):
+            export.export(mono, "demo", helpers.build_out(root), skill_commit=None)
+
+
 class TransformTest(ExportBase):
     def test_module_and_imports_rewritten(self):
         self.do_export()

@@ -130,6 +130,11 @@ def monorepo_module_prefix(slug):
     return "github.com/pulumi/autoregistry/lib/providers/%s/provider" % slug
 
 
+def monorepo_root_module_rx(slug):
+    """The bare module path of a root-layout provider (lib/providers/<p>/go.mod, #1248), not a deeper package path."""
+    return re.compile(re.escape("github.com/pulumi/autoregistry/lib/providers/%s" % slug) + r"(?![A-Za-z0-9_./-])")
+
+
 def is_text(data):
     return b"\0" not in data[:8192]
 
@@ -197,6 +202,7 @@ def text_hits(slug, rel, text, bridged=False):
     hits = []
     fix = APPLY if apply_scope(rel) else MANUAL
     own_module = monorepo_module_prefix(slug)
+    own_root_rx = monorepo_root_module_rx(slug)
     is_go = rel.endswith(".go") or rel.endswith("go.mod")
     pubs_in_test = is_provider_test(rel)
     pub_rx = re.compile(r'WithPublisher\(\s*"Pulumi"\s*\)')
@@ -204,7 +210,7 @@ def text_hits(slug, rel, text, bridged=False):
     for i, line in enumerate(lines, 1):
         scan = line
         if is_go and not bridged:  # export.py rewrites the monorepo provider module path itself in every Go file
-            scan = scan.replace(own_module, "")
+            scan = own_root_rx.sub("", scan.replace(own_module, ""))
         for cat, rx, _ in rules(slug, bridged):
             if rx.search(scan):
                 hits.append(Hit(rel, i, cat, _snippet(line), fix))

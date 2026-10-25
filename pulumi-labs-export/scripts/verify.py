@@ -1150,6 +1150,15 @@ def github_org_warnings(code_root):
     return []
 
 
+def provider_go_mod_present(pdir):
+    """True if the provider's Go module exists: <pdir>/go.mod (target layout, #1248) or <pdir>/provider/go.mod.
+
+    Go commands run from <pdir>/provider find either module root by walking up, so only this presence check
+    needs to know which layout a monorepo provider uses.
+    """
+    return os.path.isfile(os.path.join(pdir, "go.mod")) or os.path.isfile(os.path.join(pdir, "provider", "go.mod"))
+
+
 def monorepo_schema(gate, provider, mod, work, n, build_binary=True):
     """Build the provider and produce its schema under work/gen; return (schema, schema_file, bridged, bridged_meta).
 
@@ -1202,6 +1211,18 @@ def monorepo_schema(gate, provider, mod, work, n, build_binary=True):
     return schema, schema_file, bridged, bridged_meta
 
 
+def render_scratch_repo(gen, pdir, provider):
+    """Render the archetype into gen and copy the provider's README.md to its root, the layout export.py gives the mirror.
+
+    The archetype's sdk_fixups packs README.md into the .NET package once the csproj is Pulumi.Labs.<Name> (after the
+    identity switch), so a scratch repo without it fails `make build_dotnet_sdk` with NU5019.
+    """
+    render.write_repo(gen, render.make_options(provider, provider.title(), []))
+    readme = os.path.join(pdir, "README.md")
+    if os.path.isfile(readme):
+        shutil.copyfile(readme, os.path.join(gen, "README.md"))
+
+
 def run_monorepo(mono, provider, prefix, report_dir, keep=False):
     """Readiness run for lib/providers/<provider> in an autoregistry checkout; return (exit code, paths)."""
     mono = os.path.abspath(mono)
@@ -1218,8 +1239,8 @@ def run_monorepo(mono, provider, prefix, report_dir, keep=False):
     mod = os.path.join(pdir, "provider")
     versions = {}
     try:
-        if not os.path.isfile(os.path.join(mod, "go.mod")):
-            gate.add("identity", "provider module present", "FAIL", "%s/go.mod not found" % mod)
+        if not provider_go_mod_present(pdir):
+            gate.add("identity", "provider module present", "FAIL", "%s/go.mod (or %s/go.mod) not found" % (mod, pdir))
             return _end(gate, "monorepo", mono, state, versions, started, report_dir, base, {"provider": provider})
         gate.add("identity", "monorepo HEAD %s, provider %s" % (state["head"][:12], provider), "PASS",
                  "" if not state["porcelain"] else "note: monorepo worktree has %d uncommitted paths" % len(state["porcelain"]))
@@ -1238,7 +1259,7 @@ def run_monorepo(mono, provider, prefix, report_dir, keep=False):
         gen = os.path.join(work, "gen")
         if schema is not None:
             # Rendered archetype supplies the Makefile build_* targets and sdk_fixups, as in a carved repo.
-            render.write_repo(gen, render.make_options(provider, provider.title(), []))
+            render_scratch_repo(gen, pdir, provider)
             for lang in ("nodejs", "python", "go", "dotnet", "java"):
                 gate.cmd("gen_sdk_%s" % lang, "pulumi package gen-sdk --language %s" % lang,
                          ["pulumi", "package", "gen-sdk", "--language", lang, schema_file, "--version", "0.0.1-dev"],
@@ -1298,8 +1319,8 @@ def run_monorepo_examples(mono, provider, prefix, report_dir, keep=False):
     mod = os.path.join(pdir, "provider")
     versions, entries = {}, []
     try:
-        if not os.path.isfile(os.path.join(mod, "go.mod")):
-            gate.add("identity", "provider module present", "FAIL", "%s/go.mod not found" % mod)
+        if not provider_go_mod_present(pdir):
+            gate.add("identity", "provider module present", "FAIL", "%s/go.mod (or %s/go.mod) not found" % (mod, pdir))
             return _end_examples(gate, mono, state, versions, started, report_dir, base, provider, entries)
         gate.add("identity", "monorepo HEAD %s, provider %s (profile examples)" % (state["head"][:12], provider), "PASS",
                  "" if not state["porcelain"] else "note: monorepo worktree has %d uncommitted paths" % len(state["porcelain"]))
@@ -1320,7 +1341,7 @@ def run_monorepo_examples(mono, provider, prefix, report_dir, keep=False):
         gen = os.path.join(work, "gen")
         sdk = {}
         if schema is not None and langs:
-            render.write_repo(gen, render.make_options(provider, provider.title(), []))
+            render_scratch_repo(gen, pdir, provider)
             for lang in langs:
                 gate.cmd("gen_sdk_%s" % lang, "pulumi package gen-sdk --language %s" % lang,
                          ["pulumi", "package", "gen-sdk", "--language", lang, schema_file, "--version", "0.0.1-dev"],
