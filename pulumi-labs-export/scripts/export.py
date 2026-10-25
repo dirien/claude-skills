@@ -11,7 +11,7 @@ byte-identical output, except schema.json and sdk/, which `make` produces.
 
 Preconditions (each fails with an exact message): the provider is listed in
 carved-providers.json with mode "mirror"; the monorepo checkout is clean (its
-HEAD is the recorded source SHA); provider/go.mod has no relative replace;
+HEAD is the recorded source SHA); the Go module (go.mod at the provider root, or legacy provider/go.mod) has no relative replace;
 docs/_index.md and docs/installation-configuration.md exist; the monorepo copy
 already carries the pulumi-labs identity (switched in the identity-switch PR).
 
@@ -50,8 +50,8 @@ SKILL_DIR = render.SKILL_DIR
 SOURCE_REPO = "pulumi/autoregistry"
 CARVED_FILE = "carved-providers.json"
 # Top-level monorepo provider paths that are copied; nothing else is. This is
-# why version.txt, the monorepo Makefile, provider/go.mod and skills/ never
-# reach the mirror (go.mod/go.sum are moved to the root explicitly).
+# why version.txt, the monorepo Makefile and skills/ never reach the mirror (the Go module, at lib/providers/<p>/go.mod
+# or legacy provider/go.mod, is moved to the mirror root explicitly).
 COPY_TREES = [("provider/cmd", "provider/cmd"), ("provider/pkg", "provider/pkg"),
               ("examples", "examples"), ("templates", "templates"), ("docs", "docs")]
 COPY_FILES = ["README.md", "CHANGELOG.md"]
@@ -184,13 +184,35 @@ def rewrite_go(data, provider):
     return data.replace(old, new)
 
 
-def rewrite_gomod(text, provider, new_module, bridged=False):
+def native_module_files(pdir, provider):
+    """Locate a native provider's Go module in the monorepo: (go.mod path, go.sum path, layout).
+
+    Two layouts exist while issue #1248 migrates providers: "root" (lib/providers/<p>/go.mod, the target) and
+    "nested" (lib/providers/<p>/provider/go.mod, the legacy one). Both produce the identical mirror. Having both
+    is ambiguous and an error; so is having neither.
+    """
+    root = os.path.join(pdir, "go.mod")
+    nested = os.path.join(pdir, "provider", "go.mod")
+    has_root, has_nested = os.path.isfile(root), os.path.isfile(nested)
+    if has_root and has_nested:
+        raise ExportError("lib/providers/%s has both go.mod and provider/go.mod: keep exactly one Go module "
+                          "(go.mod at the provider root is the target layout, #1248)" % provider)
+    if has_root:
+        return root, os.path.join(pdir, "go.sum"), "root"
+    if has_nested:
+        return nested, os.path.join(pdir, "provider", "go.sum"), "nested"
+    raise ExportError("lib/providers/%s/go.mod (or lib/providers/%s/provider/go.mod) not found" % (provider, provider))
+
+
+def rewrite_gomod(text, provider, new_module, bridged=False, layout="nested"):
     """Return go.mod text with only the module line replaced; fail if it is not the monorepo module.
 
     A bridged provider's monorepo module is the vanity path github.com/pulumi/pulumi-<p>/provider (or already the
     pulumi-labs one when the identity-switch PR renamed it).
     """
+    gomod_rel = "go.mod" if layout == "root" else "provider/go.mod"
     old_module = ("github.com/pulumi/pulumi-%s/provider" % provider if bridged
+                  else "github.com/pulumi/autoregistry/lib/providers/%s" % provider if layout == "root"
                   else "github.com/pulumi/autoregistry/lib/providers/%s/provider" % provider)
     accepted = {old_module, new_module} if bridged else {old_module}
     lines = text.split("\n")
@@ -198,10 +220,10 @@ def rewrite_gomod(text, provider, new_module, bridged=False):
         m = re.match(r"^(\s*module\s+)(\S+)(\s*(//.*)?)$", line)
         if m:
             if m.group(2).strip('"') not in accepted:
-                raise ExportError("provider/go.mod declares module %s, want %s" % (m.group(2), " or ".join(sorted(accepted))))
+                raise ExportError("%s declares module %s, want %s" % (gomod_rel, m.group(2), " or ".join(sorted(accepted))))
             lines[i] = m.group(1) + new_module + (m.group(3) or "")
             return "\n".join(lines)
-    raise ExportError("provider/go.mod has no module line")
+    raise ExportError("%s has no module line" % gomod_rel)
 
 
 def _read_option_file(out):
@@ -330,13 +352,13 @@ def _read_version(pdir, archetype):
     return version
 
 
-def _collect_native(pdir, provider, n, gm_text):
+def _collect_native(pdir, provider, n, gm_text, gomod_rel="provider/go.mod"):
     files = {}
     rel_replaces = [(o, t) for o, t in gomod.parse_gomod(gm_text)["replaces"] if t.startswith((".", "/"))]
     if rel_replaces:
-        raise ExportError("provider/go.mod has relative replace directive(s) (%s). Exporting such a module is unsupported for now: "
+        raise ExportError("%s has relative replace directive(s) (%s). Exporting such a module is unsupported for now: "
                           "remove the replace in the monorepo (published versions only), then export again."
-                          % ", ".join("%s => %s" % r for r in rel_replaces))
+                          % (gomod_rel, ", ".join("%s => %s" % r for r in rel_replaces)))
     for srcrel, dstrel in COPY_TREES:
         base = os.path.join(pdir, srcrel)
         if os.path.isdir(base):
@@ -391,9 +413,17 @@ def build_tree(src, provider, stage, *, sha, display_name, excludes, skill_commi
     load_entry(src, provider)
     archetype = detect_archetype(pdir, provider)
 
-    gm = os.path.join(pdir, "provider", "go.mod")
-    if not os.path.isfile(gm):
-        raise ExportError("lib/providers/%s/provider/go.mod not found" % provider)
+    if archetype == "bridged":
+        # Bridged providers keep provider/go.mod for now (#1248 phase 2); a root go.mod would be ignored silently.
+        if os.path.isfile(os.path.join(pdir, "go.mod")):
+            raise ExportError("lib/providers/%s/go.mod: a root go.mod is not supported for bridged providers yet "
+                              "(keep provider/go.mod)" % provider)
+        gm, sum_path, layout = os.path.join(pdir, "provider", "go.mod"), os.path.join(pdir, "provider", "go.sum"), "nested"
+        if not os.path.isfile(gm):
+            raise ExportError("lib/providers/%s/provider/go.mod not found" % provider)
+    else:
+        gm, sum_path, layout = native_module_files(pdir, provider)
+    gomod_rel = "go.mod" if layout == "root" else "provider/go.mod"
     with open(gm, encoding="utf-8") as f:
         gm_text = f.read()
     missing = [d for d in REQUIRED_DOCS if not os.path.isfile(os.path.join(pdir, d))]
@@ -416,7 +446,8 @@ def build_tree(src, provider, stage, *, sha, display_name, excludes, skill_commi
     except render.RenderError as e:
         raise ExportError(str(e))
 
-    files = (_collect_bridged if archetype == "bridged" else _collect_native)(pdir, provider, n, gm_text)
+    files = (_collect_bridged(pdir, provider, n, gm_text) if archetype == "bridged"
+             else _collect_native(pdir, provider, n, gm_text, gomod_rel))
     for fn in COPY_FILES + [GITLEAKS_FILE]:
         p = os.path.join(pdir, fn)
         if os.path.isfile(p):
@@ -438,8 +469,7 @@ def build_tree(src, provider, stage, *, sha, display_name, excludes, skill_commi
         for rel in list(files):
             if rel.endswith(".go"):
                 files[rel] = (rewrite_go(files[rel][0], provider), files[rel][1])
-        files["go.mod"] = (rewrite_gomod(gm_text, provider, n["go_module"]).encode("utf-8"), False)
-        sum_path = os.path.join(pdir, "provider", "go.sum")
+        files["go.mod"] = (rewrite_gomod(gm_text, provider, n["go_module"], layout=layout).encode("utf-8"), False)
         if os.path.isfile(sum_path):
             files["go.sum"] = _walk_one(sum_path)
     with open(skills, "rb") as f:

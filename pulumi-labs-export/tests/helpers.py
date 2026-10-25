@@ -108,10 +108,13 @@ def quiet(fn, *args, **kw):
 MONO_MODULE = "github.com/pulumi/autoregistry/lib/providers/%s/provider"
 
 
-def build_monorepo(root, slug="demo", display="Demo", version="0.1.0"):
+def build_monorepo(root, slug="demo", display="Demo", version="0.1.0", layout="nested"):
     """Create a synthetic autoregistry checkout with a minimal mirrored lib/providers/<slug>; return its path.
 
     The provider already carries the pulumi-labs identity (the state after the identity-switch PR).
+    layout="nested" puts the Go module at lib/providers/<slug>/provider/go.mod (module .../<slug>/provider);
+    layout="root" puts it at lib/providers/<slug>/go.mod (module .../<slug>), the #1248 target. Go import
+    paths (.../<slug>/provider/pkg/...) are the same in both.
     """
     mono = os.path.join(root, "autoregistry")
     os.makedirs(mono)
@@ -131,8 +134,10 @@ def build_monorepo(root, slug="demo", display="Demo", version="0.1.0"):
     write(mono, base + "skills/SKILLS.md", "# Demo dev guide\n\nBuild with make.\n")
     write(mono, base + "docs/_index.md", "---\ntitle: Demo\nmeta_desc: x\nlayout: package\n---\n")
     write(mono, base + "docs/installation-configuration.md", "---\ntitle: Demo\nmeta_desc: x\nlayout: package\n---\n")
-    write(mono, base + "provider/go.mod", "module %s\n\ngo 1.27\n\nrequire github.com/pulumi/pulumi-go-provider v1.3.1\n" % mod)
-    write(mono, base + "provider/go.sum", "github.com/pulumi/pulumi-go-provider v1.3.1 h1:abc=\n")
+    modroot = os.path.dirname(mod) if layout == "root" else mod
+    modbase = base if layout == "root" else base + "provider/"
+    write(mono, modbase + "go.mod", "module %s\n\ngo 1.27\n\nrequire github.com/pulumi/pulumi-go-provider v1.3.1\n" % modroot)
+    write(mono, modbase + "go.sum", "github.com/pulumi/pulumi-go-provider v1.3.1 h1:abc=\n")
     write(mono, base + "provider/cmd/pulumi-resource-%s/main.go" % slug,
           GO_HEADER + 'package main\n\nimport (\n\t"%s/pkg/provider"\n\t"%s/pkg/version"\n)\n\nfunc main() { provider.New(version.Version) }\n' % (mod, mod))
     write(mono, base + "provider/pkg/provider/provider.go", GO_HEADER +

@@ -79,7 +79,7 @@ Per mirrored provider, at most one provider per run, in the lifecycle run:
    `[Unreleased]` on monorepo `main` has at least one entry, and the last cut
    was 7 or more days ago. Cut sooner (next run) when an entry starts with
    `Security:`. With no entries, cut a patch at most monthly when
-   `git log <lastSyncedCommit>..origin/main -- lib/providers/<p>/provider/go.mod`
+   `git log <lastSyncedCommit>..origin/main -- lib/providers/<p>/go.mod lib/providers/<p>/provider/go.mod`
    shows dependency changes (the entry is generated: "Updated dependencies").
 2. Version math, 0.x only: any `BREAKING:` entry or a new resource/function
    (an "Added" entry) is a minor bump (`0.1.4` to `0.2.0`); anything else is a

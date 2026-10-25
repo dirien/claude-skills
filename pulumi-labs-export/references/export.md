@@ -28,7 +28,7 @@ relative-replace rule, the module location, `version.txt` and the cmd mains diff
   `goModule` equal to the names from `names.py`.
 - The monorepo checkout is clean; its HEAD is the recorded source SHA. Use a
   fresh worktree of `origin/main`.
-- `provider/go.mod` has no relative `replace` (unsupported for now).
+- The Go module has no relative `replace` (unsupported for now). It is `lib/providers/<p>/go.mod` (target layout, #1248; module `github.com/pulumi/autoregistry/lib/providers/<p>`) or the legacy `lib/providers/<p>/provider/go.mod` (module `.../<p>/provider`); having both, or neither, is refused. Both layouts export the identical mirror.
 - `docs/_index.md` and `docs/installation-configuration.md` exist (add them in
   the identity-switch PR; model: the archetype's docs, `references/archetype.md`).
 - `version.txt` is `0.x.y`; `skills/SKILLS.md` exists.
@@ -44,14 +44,14 @@ export written: leftovers are impossible.
 
 Transform: copy `provider/cmd`, `provider/pkg`, `examples/`, `templates/`,
 `docs/`, `README.md`, `CHANGELOG.md` and, if present, `.gitleaks.toml` (the
-reviewed secret-scan allowlist, `verify.md`); move `provider/go.mod`/`go.sum` to the
+reviewed secret-scan allowlist, `verify.md`); move the Go module's `go.mod`/`go.sum` (either layout) to the
 root with the module line `github.com/pulumi-labs/pulumi-<p>`; rewrite
 `github.com/pulumi/autoregistry/lib/providers/<p>/provider/` to
 `github.com/pulumi-labs/pulumi-<p>/provider/` in every copied `.go` file;
 `CLAUDE.md` is `skills/SKILLS.md` under a short generated header; `render.py`
 writes the archetype files (it replaces the monorepo `provider/pkg/version/version.go`).
 Never copied: `version.txt`, the monorepo `Makefile` and `.gitignore`,
-`provider/go.mod`, `skills/`. `.pulumi-labs-export.json` records provider,
+the Go module's `go.mod` in its monorepo location, `skills/`. `.pulumi-labs-export.json` records provider,
 display name, excluded platforms, archetype repo and SHA, `source_repo`,
 `source_sha`, `source_version` (from `version.txt`), `skill_commit` (or null)
 and is reused on the next export (display name, excluded platforms). Pass

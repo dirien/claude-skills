@@ -163,6 +163,13 @@ class CheckTest(IdentityBase):
             self.assertEqual([h for h in hits if h.rel == rel], [], rel)
         self.assertFalse([h for h in hits if h.rel == "provider/go.mod"])
 
+    def test_root_layout_module_line_is_not_a_hit(self):
+        """#1248: lib/providers/<p>/go.mod declares the bare .../<p> module; export.py rewrites it."""
+        root = "module github.com/pulumi/autoregistry/lib/providers/demo\n\ngo 1.27\n"
+        self.assertEqual(identity.text_hits("demo", "go.mod", root), [])
+        deeper = "module github.com/pulumi/autoregistry/lib/providers/demo/other\n"
+        self.assertTrue(identity.text_hits("demo", "go.mod", deeper))
+
     def test_new_names_and_other_providers_are_not_hits(self):
         extra = ("using Pulumi.Labs.Demo;\nimport pulumi_labs_demo\n@pulumi-labs/demo\ncom.pulumi.labs.demo.Thing\n"
                  "github.com/pulumi-labs/pulumi-demo/sdk/go/demo\ngithub.com/pulumi/pulumi-demo-extra\n@pulumi/demo-extra\n"

@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import stat
 import tempfile
 import unittest
@@ -294,6 +295,27 @@ class ToolchainSubsetTest(unittest.TestCase):
     def test_profile_flag_exists(self):
         with self.assertRaises(SystemExit):
             verify.main(["--monorepo", ".", "--provider", "x", "--profile", "bogus"])
+
+
+class ProviderGoModLayoutTest(unittest.TestCase):
+    """Issue #1248: a monorepo provider's go.mod may sit at lib/providers/<p>/go.mod or provider/go.mod."""
+
+    def _pdir(self, *files):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        for rel in files:
+            os.makedirs(os.path.dirname(os.path.join(d, rel)), exist_ok=True)
+            open(os.path.join(d, rel), "w").close()
+        return d
+
+    def test_legacy_layout(self):
+        self.assertTrue(verify.provider_go_mod_present(self._pdir("provider/go.mod")))
+
+    def test_top_level_layout(self):
+        self.assertTrue(verify.provider_go_mod_present(self._pdir("go.mod", "provider/cmd/x/main.go")))
+
+    def test_missing(self):
+        self.assertFalse(verify.provider_go_mod_present(self._pdir("provider/cmd/x/main.go")))
 
 
 if __name__ == "__main__":

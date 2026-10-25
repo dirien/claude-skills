@@ -230,7 +230,7 @@ the naming table, the gate and the reports are the same; what differs:
 
 | | native | bridged |
 |---|---|---|
-| Go module | root `go.mod` | `provider/go.mod` plus the in-repo `provider/shim` module (relative `replace` kept) |
+| Go module | root `go.mod` in the mirror (from monorepo `lib/providers/<p>/go.mod` or legacy `provider/go.mod`) | `provider/go.mod` plus the in-repo `provider/shim` module (relative `replace` kept) |
 | Schema | built binary (`pulumi package get-schema`) | `tfgen`, committed with `bridge-metadata.json`; the binary embeds it |
 | cmd mains | the provider's | rendered by the archetype (flavor pf or sdkv2, recorded in `.pulumi-labs-export.json`) |
 | Identity lives in | `infer.NewProviderBuilder()` | `tfbridge.ProviderInfo` (`identity.py` reads it) |
