@@ -9,7 +9,7 @@ the other agents. If this page and `AGENTS.md` disagree, stop and report.
 
 | Who | Does | Never |
 |---|---|---|
-| Engin (human) | Decides the Registry name, creates and configures the repo (`repo-setup.md`), approves cards, makes the repo public/protected, tags, decides on `BREAKING` releases and 1.0 | |
+| Engin (human) | Decides the Registry name, creates and configures the repo (`repo-setup.md`), approves cards, makes the repo public/protected, decides on `BREAKING` releases and 1.0 | |
 | Architect | Builds and maintains `lib/providers/<p>`, adds `[Unreleased]` CHANGELOG entries | Edits `version.txt` or `carved-providers.json` of a mirrored provider, touches a mirror |
 | Reviewer | Clears every PR on its exact head SHA: monorepo PRs and Publisher PRs in the mirrors | |
 | Publisher | Identity switch, export, sync, release-cut PR, onboarding issues, feedback loop, publication check | Tags, creates or configures repos, edits a mirror by hand, bumps `version.txt` outside a release-cut PR |
@@ -110,8 +110,11 @@ fixes for engineering feedback reach the mirror by re-syncing the SAME version:
 no `version.txt` bump, branch `sync/v<version>-<n>` (n = 2, 3, ...), commit
 `Sync pulumi/autoregistry@<sha> (v<version>)`. Once the tag exists, the next
 sync needs a new version (a release cut). Never move or re-create a tag.
-A "ready to tag" notice names the mirror `main` SHA; a candidate sync after it
-supersedes it and the Publisher sends a new notice.
+The Publisher asks engineering for each tag with an issue on
+`pulumi/platform-providers-team` titled `Tag pulumi-labs/pulumi-<name> v<X.Y.Z>`
+that names the mirror `main` SHA; engineering tags and closes it. A candidate
+sync after the request supersedes it: the Publisher comments the new SHA on
+that issue.
 
 ## Publisher PR conventions
 
