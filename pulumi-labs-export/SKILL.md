@@ -304,11 +304,12 @@ monorepo `main` is greater than the entry's `lastSyncedVersion`. Branch
 `sync/v<version>` in the mirror, `export.py --out . --generate`, commit
 `Sync pulumi/autoregistry@<sha> (v<version>)`, `verify.py`,
 `--assert-pushable`, push the branch, open a PR, get Reviewer clearance and
-green CI, squash-merge. Then a monorepo PR updates the sync fields. Then tell
-Engin "ready to tag v<version>". Never tag.
+green CI, squash-merge. Then a monorepo PR updates the sync fields. Then file the
+tag request (`Tag pulumi-labs/pulumi-<name> v<X.Y.Z>` on `pulumi/platform-providers-team`, see
+`references/lifecycle.md`) and tell Engin. Never tag.
 
 **f. Release cut.** Between syncs, decide whether a new version is due and open
-the release-cut PR (only `version.txt` and the CHANGELOG rollover) per
+the release-cut PR (only `version.txt` and the CHANGELOG rollover; only the CHANGELOG rollover for the first release of an untagged version) per
 `references/lifecycle.md`. PR branches, titles and the clearance protocol are
 there too, as are the mirror-side events (Dependabot or outside PRs on a mirror,
 a hand edit) and breaking, removed or renamed providers.
