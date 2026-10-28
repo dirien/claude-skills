@@ -49,7 +49,7 @@ def make_deb(path, data_name="data.tar.xz", data=None):
 class PinTest(unittest.TestCase):
     def test_urls_amd64(self):
         s = bootstrap.tool_specs("amd64", "3.241.0")
-        self.assertEqual(s["go"].url, "https://go.dev/dl/go1.27.2.linux-amd64.tar.gz")
+        self.assertEqual(s["go"].url, "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz")
         self.assertEqual(s["go"].sha256, bootstrap.GO_SHA256["amd64"])
         self.assertEqual(s["pulumi"].url, "https://github.com/pulumi/pulumi/releases/download/v3.241.0/pulumi-v3.241.0-linux-x64.tar.gz")
         self.assertEqual(s["pulumi"].checksums_url, "https://github.com/pulumi/pulumi/releases/download/v3.241.0/pulumi-3.241.0-checksums.txt")
@@ -59,7 +59,7 @@ class PinTest(unittest.TestCase):
 
     def test_urls_arm64(self):
         s = bootstrap.tool_specs("arm64", "3.241.0")
-        self.assertEqual(s["go"].url, "https://go.dev/dl/go1.27.2.linux-arm64.tar.gz")
+        self.assertEqual(s["go"].url, "https://go.dev/dl/go1.27.3.linux-arm64.tar.gz")
         self.assertEqual(s["go"].sha256, bootstrap.GO_SHA256["arm64"])
         self.assertTrue(s["pulumi"].url.endswith("pulumi-v3.241.0-linux-arm64.tar.gz"))
         self.assertTrue(s["jq"].url.endswith("jq-linux-arm64"))
@@ -492,7 +492,7 @@ class CheckTest(helpers.TempDirMixin, unittest.TestCase):
 
     def test_fake_installed_is_ok_and_wrong_version_detected(self):
         prefix = os.path.join(self.tmp, "p")
-        fake = {"go": "echo go version go1.27.2 linux/amd64", "pulumi": "echo v3.241.0",
+        fake = {"go": "echo go version go1.27.3 linux/amd64", "pulumi": "echo v3.241.0",
                 "jq": "echo jq-1.8.2", "gitleaks": "echo 8.30.1", "make": "echo GNU Make 4.3"}
         for name, cmd in fake.items():
             helpers.write(prefix, "bin/" + name, "#!/bin/sh\n%s\n" % cmd)
