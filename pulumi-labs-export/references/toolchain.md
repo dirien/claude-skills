@@ -43,7 +43,7 @@ in every log line.
 
 | Tool     | Version | Source                                              | SHA-256 from                                   |
 |----------|---------|-----------------------------------------------------|------------------------------------------------|
-| Go       | 1.27.2  | `go.dev/dl` tarball (= `.go-version` in autoregistry) | pinned in `bootstrap.py` (from go.dev JSON)    |
+| Go       | 1.27.3  | `go.dev/dl` tarball (= `.go-version` in autoregistry) | pinned in `bootstrap.py` (from go.dev JSON)    |
 | Pulumi   | read from `archetype/mise.toml.tmpl` | GitHub release `pulumi-v<ver>-linux-<x64\|arm64>.tar.gz` | `pulumi-<ver>-checksums.txt` in the release |
 | jq       | 1.8.2   | jqlang/jq release binary                            | `sha256sum.txt` in the release                 |
 | gitleaks | 8.30.1  | gitleaks/gitleaks release tarball                   | `gitleaks_<ver>_checksums.txt` in the release  |

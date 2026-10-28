@@ -50,10 +50,10 @@ SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # from https://go.dev/dl/?mode=json&include=all (go.dev publishes no checksum
 # file). The Pulumi version is read from archetype/mise.toml.tmpl. jq, gitleaks
 # and Pulumi hashes come from the checksum file next to the release assets.
-GO_VERSION = "1.27.2"
+GO_VERSION = "1.27.3"
 GO_SHA256 = {
-    "amd64": "ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5",
-    "arm64": "94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8",
+    "amd64": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40",
+    "arm64": "a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49",
 }
 JQ_VERSION = "1.8.2"
 GITLEAKS_VERSION = "8.30.1"
