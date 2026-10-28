@@ -88,7 +88,12 @@ Per mirrored provider, at most one provider per run, in the lifecycle run:
    and open no release-cut PR until he writes "go" on the card.
 4. Branch `publisher/release-<p>-v<version>`; the PR changes exactly two files:
    `version.txt`, and `CHANGELOG.md` where the `[Unreleased]` entries move under
-   `## [<version>] - <date>` (leave an empty `## [Unreleased]`). Branch, title
+   `## [<version>] - <date>` (leave an empty `## [Unreleased]`). Exception, the
+   first release of an untagged version: when `version.txt` already equals
+   `lastSyncedVersion`, the mirror has no tag `v<version>` and `CHANGELOG.md` has
+   no `## [<version>]` section, the PR changes only `CHANGELOG.md` (same
+   rollover, no `version.txt` edit) and a candidate sync (below) carries it to the
+   mirror before the tag request. Branch, title
    and first body line are in "Publisher PR conventions" below. Reviewer
    clearance on the head SHA, green checks (including `Mirror Release Notes` and
    `Provider readiness`), squash-merge.
@@ -107,7 +112,11 @@ in one place and fits the Publisher's existing `breaking` escalation.
 While `v<lastSyncedVersion>` does not exist as a tag in the mirror
 (`git ls-remote --tags https://github.com/pulumi-labs/pulumi-<p> 'v<ver>'`),
 fixes for engineering feedback reach the mirror by re-syncing the SAME version:
-no `version.txt` bump, branch `sync/v<version>-<n>` (n = 2, 3, ...), commit
+no `version.txt` bump, branch `sync/v<version>-<n>` (`n` is the next number not used by any
+`sync/v<version>-*` branch or PR in the mirror, open or closed: check
+`gh pr list -R pulumi-labs/pulumi-<p> --state all --search "head:sync/v<version>-"`
+and `git ls-remote --heads`; the first candidate is 2, but a mirror PR may already
+have taken it), commit
 `Sync pulumi/autoregistry@<sha> (v<version>)`. Once the tag exists, the next
 sync needs a new version (a release cut). Never move or re-create a tag.
 The Publisher asks engineering for each tag with an issue on

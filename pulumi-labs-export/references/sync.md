@@ -31,7 +31,8 @@ sync, for a version that has no tag yet (`lifecycle.md`).
 5. Reviewer clearance on the exact head SHA, green CI, squash-merge.
 6. Monorepo PR updating `lastSyncedCommit` and `lastSyncedVersion` (and
    nothing else) in `carved-providers.json`.
-7. Tell Engin: "ready to tag v<version>". The agent never tags.
+7. File the tag request (`Tag pulumi-labs/pulumi-<name> v<X.Y.Z>` on `pulumi/platform-providers-team`, see
+   `lifecycle.md`) and tell Engin. The agent never tags.
 
 Engineering feedback on the mirror, a failing gate, a wrong doc: fix it in the
 monorepo (PR, review, an `[Unreleased]` entry), merge, then sync. While the
