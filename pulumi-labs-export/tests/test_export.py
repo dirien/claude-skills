@@ -482,6 +482,17 @@ class GenerateAndAllowlistTest(ExportBase):
         self.do_export()
         self.assertEqual(self.read(".gitleaks.toml"), toml)
 
+    def test_qa_manifest_is_copied_to_the_mirror_root(self):
+        qa = "credentials: []\nresources: []\nfunctions: []\n"
+        helpers.write(self.mono, "lib/providers/%s/qa.yaml" % self.slug, qa)
+        helpers.commit_all(self.mono, "qa manifest")
+        self.do_export()
+        self.assertEqual(self.read("qa.yaml"), qa)
+
+    def test_no_qa_manifest_means_no_file(self):
+        self.do_export()
+        self.assertFalse(os.path.exists(os.path.join(self.out, "qa.yaml")))
+
     def test_no_allowlist_means_no_file(self):
         self.do_export()
         self.assertFalse(os.path.exists(os.path.join(self.out, ".gitleaks.toml")))

@@ -282,6 +282,41 @@ class FailureKeysTest(unittest.TestCase):
         self.assertIn("- `clerk:compile_go:examples/team-auth-go`", md)
 
 
+class QaManifestStepTest(unittest.TestCase):
+    MONO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    SCHEMA = {"config": {"variables": {"t": {"defaultInfo": {"environment": ["FOO_TOKEN"]}}}},
+              "resources": {"foo:index:Thing": {}}, "functions": {"foo:index:getThing": {}}}
+    GOOD = ("credentials:\n  - {name: FOO_TOKEN, required: true}\nresources:\n"
+            "  - {type: 'foo:index:Thing', test: true, update: name, cost: none}\n"
+            "functions:\n  - {name: getThing, test: true}\n")
+
+    def run_step(self, mono, qa):
+        gate = verify.Gate(tempfile.mkdtemp(), {})
+        with tempfile.TemporaryDirectory() as d:
+            if qa is not None:
+                helpers.write(d, "qa.yaml", qa)
+            verify.qa_manifest_step(gate, self.SCHEMA, mono, d)
+        return gate.steps[-1]
+
+    def test_no_manifest_is_a_skip_not_a_failure(self):
+        self.assertEqual(self.run_step(self.MONO, None)["status"], "SKIP")
+
+    def test_tree_without_the_tool_is_a_skip(self):
+        with tempfile.TemporaryDirectory() as mono:
+            self.assertEqual(self.run_step(mono, self.GOOD)["status"], "SKIP")
+
+    @unittest.skipUnless(shutil.which("go") and os.path.isfile(os.path.join(MONO, "tools", "qa-manifest", "go.mod")), "needs go and tools/qa-manifest")
+    def test_complete_manifest_passes_and_a_gap_fails_with_a_stable_key(self):
+        self.assertEqual(self.run_step(self.MONO, self.GOOD)["status"], "PASS")
+        gap = self.GOOD.replace("FOO_TOKEN", "OTHER_TOKEN")
+        gate = verify.Gate(tempfile.mkdtemp(), {})
+        with tempfile.TemporaryDirectory() as d:
+            helpers.write(d, "qa.yaml", gap)
+            verify.qa_manifest_step(gate, self.SCHEMA, self.MONO, d)
+        rep = eg.failure_report("foo", gate.steps)
+        self.assertEqual(rep["keys"], ["foo:qa_manifest:credentials/FOO_TOKEN", "foo:qa_manifest:credentials/OTHER_TOKEN"])
+
+
 class ToolchainSubsetTest(unittest.TestCase):
     def test_only_the_requested_tools_are_probed(self):
         tmp = tempfile.mkdtemp()

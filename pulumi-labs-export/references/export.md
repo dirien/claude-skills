@@ -44,7 +44,8 @@ export written: leftovers are impossible.
 
 Transform: copy `provider/cmd`, `provider/pkg`, `examples/`, `templates/`,
 `docs/`, `README.md`, `CHANGELOG.md` and, if present, `.gitleaks.toml` (the
-reviewed secret-scan allowlist, `verify.md`); move the Go module's `go.mod`/`go.sum` (either layout) to the
+reviewed secret-scan allowlist, `verify.md`) and `qa.yaml` (the runtime QA manifest, #1483;
+QA reads it from the mirror root); move the Go module's `go.mod`/`go.sum` (either layout) to the
 root with the module line `github.com/pulumi-labs/pulumi-<p>`; rewrite
 `github.com/pulumi/autoregistry/lib/providers/<p>/provider/` to
 `github.com/pulumi-labs/pulumi-<p>/provider/` in every copied `.go` file;
@@ -189,5 +190,6 @@ fails a schema without the flag and SDKs not stamped `0.0.1-dev`;
 
 ## d. Onboarding issues
 
-`scripts/onboarding.py`, see `references/onboarding.md`. No tag request until
-they are closed.
+`scripts/onboarding.py`, see `references/onboarding.md`. The asks are Linear
+issues in team PVD. No first tag until they are closed (Done, Canceled or
+Duplicate).

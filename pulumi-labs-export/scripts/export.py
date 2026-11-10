@@ -57,6 +57,8 @@ COPY_TREES = [("provider/cmd", "provider/cmd"), ("provider/pkg", "provider/pkg")
 COPY_FILES = ["README.md", "CHANGELOG.md"]
 # Optional reviewed gitleaks allowlist; goes to the mirror root, where secret_scan.py reads it. Never templated.
 GITLEAKS_FILE = ".gitleaks.toml"
+# Optional runtime QA manifest (#1483); goes to the mirror root so QA can read it from the mirror. Never templated.
+QA_FILE = "qa.yaml"
 REQUIRED_DOCS = ["docs/_index.md", "docs/installation-configuration.md"]
 # Bridged: the cmd/ mains belong to the archetype (the resource main embeds the generated schema), so the monorepo's
 # copies are not exported. schema.json is generated; it is never exported even if the monorepo happens to commit one.
@@ -448,7 +450,7 @@ def build_tree(src, provider, stage, *, sha, display_name, excludes, skill_commi
 
     files = (_collect_bridged(pdir, provider, n, gm_text) if archetype == "bridged"
              else _collect_native(pdir, provider, n, gm_text, gomod_rel))
-    for fn in COPY_FILES + [GITLEAKS_FILE]:
+    for fn in COPY_FILES + [GITLEAKS_FILE, QA_FILE]:
         p = os.path.join(pdir, fn)
         if os.path.isfile(p):
             files[fn] = _walk_one(p)

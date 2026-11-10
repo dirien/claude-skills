@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print the onboarding issue drafts for pulumi/platform-providers-team.
+"""Print the onboarding ask drafts for Linear team PVD.
 
     python3 scripts/onboarding.py --provider modal
     python3 scripts/onboarding.py --provider modal --repo ../pulumi-modal --out-dir /tmp/issues
@@ -9,22 +9,24 @@ the one in --repo), not from memory. If the workflow no longer has the jobs
 and environments this script expects, it fails: the archetype changed, stop
 and tell a human.
 
-One ask per issue. Run the printed duplicate check before filing each.
+One ask per Linear issue, filed with the Linear tools. Run the printed duplicate
+checks (Linear PVD, and the old GitHub tracker) before filing each.
 """
 import argparse
 import json
 import os
 import re
-import shlex
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import names  # noqa: E402
 import render  # noqa: E402
 
-TICKET_REPO = "pulumi/platform-providers-team"
-NOTE = ("Note: This is a stop gap until Workprentice has permissions to Linear. "
-        "If you do have any questions or concerns, speak to @pose")
+LINEAR_TEAM = "PVD"
+LINEAR_URL = "https://linear.app/pulumi/team/PVD/"
+# Older asks live on GitHub until engineering closes them; nothing new is filed there.
+LEGACY_REPO = "pulumi/platform-providers-team"
+FOOTER = "\U0001f916 Autoregistry Publisher \u00b7 Workprentice"
 MAVEN_SECRETS = ["MAVEN_CENTRAL_OSSRH_PASSWORD", "MAVEN_CENTRAL_OSSRH_USERNAME",
                  "MAVEN_CENTRAL_SIGNING_KEY", "MAVEN_CENTRAL_SIGNING_PASSWORD"]
 
@@ -150,7 +152,7 @@ def build_issues(provider, release_text):
             "## Exact names", names_block, "",
             "## What it unblocks", unblocks, "",
             "Repo: https://github.com/%s" % repo, "",
-            NOTE,
+            FOOTER,
         ])
         issues.append({"title": title, "body": body})
 
@@ -190,8 +192,9 @@ def build_issues(provider, release_text):
 
 
 def dup_check(title):
-    """Return the duplicate-check command for a title."""
-    return 'gh issue list -R %s --state all --search "%s in:title"' % (TICKET_REPO, title)
+    """Return the duplicate checks for a title: Linear PVD first, then the old GitHub tracker."""
+    return ("Linear team %s: search for the exact title %r (any state; Done, Canceled and Duplicate count as closed). "
+            "Older asks: gh issue list -R %s --state all --search \"%s in:title\"" % (LINEAR_TEAM, title, LEGACY_REPO, title))
 
 
 def main(argv=None):
@@ -200,7 +203,7 @@ def main(argv=None):
     ap.add_argument("--repo", help="carved repo dir; parse its .github/workflows/release.yml instead of the vendored template")
     ap.add_argument("--archetype", choices=sorted(render.ARCHETYPES), default="native",
                     help="which vendored release.yml to parse when --repo is not given (the publishing jobs are the same in both)")
-    ap.add_argument("--out-dir", help="also write each body to <out-dir>/NN.md and print `gh issue create` commands")
+    ap.add_argument("--out-dir", help="also write each body to <out-dir>/NN.md")
     ap.add_argument("--json", action="store_true", help="print the drafts as JSON")
     args = ap.parse_args(argv)
     try:
@@ -223,23 +226,23 @@ def main(argv=None):
             path = os.path.join(args.out_dir, "%02d.md" % i)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(it["body"] + "\n")
-            it["create_command"] = "gh issue create -R %s --title %s --body-file %s" % (TICKET_REPO, shlex.quote(it["title"]), shlex.quote(path))
+            it["body_file"] = path
     if args.json:
         print(json.dumps(issues, indent=2))
         return 0
     for i, it in enumerate(issues, 1):
         print("=" * 72)
-        print("ISSUE %d of %d on %s" % (i, len(issues), TICKET_REPO))
-        print("1. duplicate check (run first; add evidence to an existing issue instead of filing a duplicate):")
+        print("LINEAR ISSUE %d of %d, team %s (%s)" % (i, len(issues), LINEAR_TEAM, LINEAR_URL))
+        print("1. duplicate check (run first; comment on an existing issue instead of filing a duplicate):")
         print("   " + it["duplicate_check"])
-        if "create_command" in it:
-            print("2. file it:\n   " + it["create_command"])
+        print("2. file it with the Linear issue tool: team %s, the TITLE and BODY below%s." % (
+            LINEAR_TEAM, ", body from " + it["body_file"] if "body_file" in it else ""))
         print("TITLE: " + it["title"])
         print("BODY:")
         print(it["body"])
         print()
     print("Go needs no onboarding issue: pulumi/publish-go-sdk-action pushes the SDK tag with GITHUB_TOKEN.")
-    print("Do not tag a release until every issue above is closed.")
+    print("Do not tag a release until every issue above is closed (Linear: Done, Canceled or Duplicate).")
     return 0
 
 
