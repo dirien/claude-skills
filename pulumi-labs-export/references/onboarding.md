@@ -1,4 +1,4 @@
-# Onboarding issues
+# Onboarding asks (Linear PVD)
 
 `python3 scripts/onboarding.py --provider <p> [--repo <dir>] [--out-dir <dir>] [--json]`
 
@@ -7,19 +7,26 @@ The asks are derived by parsing `release.yml` (the rendered one, or the one in
 environments or ESC values are not there; that means the archetype changed, so
 stop and tell a human instead of filing from memory.
 
-All issues go on `pulumi/platform-providers-team`, one ask per issue. Run the
-printed duplicate check first:
+All asks are Linear issues in team PVD (https://linear.app/pulumi/team/PVD/),
+created with the Linear tools, one ask per issue, with exact names and the
+exact command if there is one. Run the printed duplicate checks first: search
+Linear PVD for the exact title, and for older asks run
 
 ```
 gh issue list -R pulumi/platform-providers-team --state all --search "<title> in:title"
 ```
 
-If an issue exists, add evidence to it. Every body ends with the note line
-(verbatim, from the draft):
+If an issue exists in either place, add evidence there (comment) instead of
+filing a duplicate. Nothing new is filed on `pulumi/platform-providers-team`;
+issues already there stay until engineering closes them, and you answer on
+them. Every Linear issue and comment ends with the footer line (verbatim, from
+the draft):
 
 ```
-Note: This is a stop gap until Workprentice has permissions to Linear. If you do have any questions or concerns, speak to @pose
+🤖 Autoregistry Publisher · Workprentice
 ```
+
+A Linear issue counts as closed in Done, Canceled or Duplicate.
 
 ## What the archetype release.yml does
 
@@ -46,6 +53,6 @@ from ESC". The workflow does something more specific:
 ## Order and unblocking
 
 ESC first (NuGet and Maven jobs need it), then npm, PyPI, NuGet, Maven in any
-order. Do not tag a release until every issue is closed. If the first
-`gh issue create` returns 403, issue creation is not permitted for this
-credential: report it and stop (see the access check in SKILL.md).
+order. Do not tag a release until every Linear issue is closed. If the first
+Linear issue call fails, Linear access is not available to this session:
+report it and stop (see the access check in SKILL.md).

@@ -9,11 +9,11 @@ the other agents. If this page and `AGENTS.md` disagree, stop and report.
 
 | Who | Does | Never |
 |---|---|---|
-| Engin (human) | Decides the Registry name, creates and configures the repo (`repo-setup.md`), approves cards, makes the repo public/protected, decides on `BREAKING` releases and 1.0 | |
+| Engin (human) | Decides the Registry name, creates and configures the repo (`repo-setup.md`), approves cards, makes the repo public/protected, decides on 1.0 (a `BREAKING` release below 1.0 needs no go) | |
 | Architect | Builds and maintains `lib/providers/<p>`, adds `[Unreleased]` CHANGELOG entries | Edits `version.txt` or `carved-providers.json` of a mirrored provider, touches a mirror |
 | Reviewer | Clears every PR on its exact head SHA: monorepo PRs and Publisher PRs in the mirrors | |
-| Publisher | Identity switch, export, sync, release-cut PR, onboarding issues, feedback loop, publication check | Tags, creates or configures repos, edits a mirror by hand, bumps `version.txt` outside a release-cut PR |
-| Pulumi engineering | Registry-side setup, tag `v0.x.y`, publish | |
+| Publisher | Identity switch, export, sync, release-cut PR, onboarding asks (Linear PVD), feedback loop, publication check | Tags outside the "Tagging" rules or at `1.0` and above, creates or configures repos, edits a mirror by hand, bumps `version.txt` outside a release-cut PR |
+| Pulumi engineering | Registry-side setup, publishing credentials, tag when the Publisher may not, publish | |
 
 ## Card template (Autoregistry Publishing board)
 
@@ -49,7 +49,7 @@ card, card description as context), adds `waiting-on-build` to `Labels:`, keeps 
 (`normal`). When the directory appears on main, it removes `waiting-on-build`, completes the card from this template
 and links the request issue. See `AGENTS.md` ("Provider requests").
 
-Update approval (a breaking release of a published provider): a human adds "Approved: breaking v<x.y.z>" to the card.
+Breaking releases below 1.0 need no approval line; only a move to 1.0 is a human decision.
 ```
 
 The Publisher re-checks every line that a script can check (repo exists, empty,
@@ -77,15 +77,17 @@ Per mirrored provider, at most one provider per run, in the lifecycle run:
 
 1. Cut when the provider is Published or Handover with a synced mirror and
    `[Unreleased]` on monorepo `main` has at least one entry, and the last cut
-   was 7 or more days ago. Cut sooner (next run) when an entry starts with
-   `Security:`. With no entries, cut a patch at most monthly when
+   was 1 or more days ago (releases are continuous). Cut at once (next run) when
+   an entry starts with `Security:`. With no entries, cut a patch at most monthly when
    `git log <lastSyncedCommit>..origin/main -- lib/providers/<p>/go.mod lib/providers/<p>/provider/go.mod`
    shows dependency changes (the entry is generated: "Updated dependencies").
 2. Version math, 0.x only: any `BREAKING:` entry or a new resource/function
    (an "Added" entry) is a minor bump (`0.1.4` to `0.2.0`); anything else is a
    patch. Never `1.0.0`; moving to 1.0 is Engin's decision.
-3. A `BREAKING:` entry: label the card `breaking`, notify Engin (`important`),
-   and open no release-cut PR until he writes "go" on the card.
+3. A `BREAKING:` entry: below 1.0 it needs no go. Label the card `breaking`,
+   list the breaking changes on the card and keep them in the release notes
+   (the `BREAKING:` lines of the CHANGELOG section), and cut as a minor bump.
+   Engin's go is only needed for `1.0.0`, which you never cut.
 4. Branch `publisher/release-<p>-v<version>`; the PR changes exactly two files:
    `version.txt`, and `CHANGELOG.md` where the `[Unreleased]` entries move under
    `## [<version>] - <date>` (leave an empty `## [Unreleased]`). Exception, the
@@ -93,7 +95,7 @@ Per mirrored provider, at most one provider per run, in the lifecycle run:
    `lastSyncedVersion`, the mirror has no tag `v<version>` and `CHANGELOG.md` has
    no `## [<version>]` section, the PR changes only `CHANGELOG.md` (same
    rollover, no `version.txt` edit) and a candidate sync (below) carries it to the
-   mirror before the tag request. Branch, title
+   mirror before the tag. Branch, title
    and first body line are in "Publisher PR conventions" below. Reviewer
    clearance on the head SHA, green checks (including `Mirror Release Notes` and
    `Provider readiness`), squash-merge.
@@ -104,7 +106,7 @@ Why the Publisher and not the Architect: the Architect's and Dependabot's PRs
 are many, small and parallel, and none of them knows what else is unreleased;
 per-PR bumps would conflict on `version.txt`, force a mirror sync and a tag per
 change, and Dependabot cannot edit `version.txt` at all. One owner of version
-math, batching weekly, keeps the mirror quiet, makes breaking changes visible
+math, cutting daily at most, keeps the mirror quiet, makes breaking changes visible
 in one place and fits the Publisher's existing `breaking` escalation.
 
 ## Candidate sync (before the first tag, or any untagged version)
@@ -119,11 +121,37 @@ and `git ls-remote --heads`; the first candidate is 2, but a mirror PR may alrea
 have taken it), commit
 `Sync pulumi/autoregistry@<sha> (v<version>)`. Once the tag exists, the next
 sync needs a new version (a release cut). Never move or re-create a tag.
-The Publisher asks engineering for each tag with an issue on
-`pulumi/platform-providers-team` titled `Tag pulumi-labs/pulumi-<name> v<X.Y.Z>`
-that names the mirror `main` SHA; engineering tags and closes it. A candidate
-sync after the request supersedes it: the Publisher comments the new SHA on
-that issue.
+The Publisher tags each new version itself right after its sync merges and the
+mirror's `test` run is green (below). There are no tag-request issues (Linear PVD or
+`pulumi/platform-providers-team`). A candidate sync before the tag simply
+carries the fix; the tag goes on the newest synced SHA.
+
+## Tagging
+
+The Publisher tags every new version itself, right after its sync PR merged
+and the mirror's `test` run is green on the merge commit. It may push one new
+tag `v<version>` to a mirror when ALL hold, checked in this session against
+live state:
+
+1. The sync PR is merged, the monorepo sync-fields PR is merged or open with
+   the same SHA, and the card is in Published or Handover.
+2. The version is `0.x.y`. Never `1.0` or above. A `BREAKING:` entry in the
+   CHANGELOG section does not block the tag below 1.0.
+3. Mirror `main` tip equals `lastSyncedCommit` in `carved-providers.json`,
+   the drift check reports no `DRIFT`, and no mirror pull request is open.
+4. A completed, successful `test` check run exists for that exact SHA
+   (`gh api repos/pulumi-labs/pulumi-<p>/commits/<sha>/check-runs`).
+5. For the provider's first tag, every onboarding issue is closed (Linear: Done, Canceled or Duplicate). Later versions do not wait for them.
+6. `git ls-remote --tags` shows `v<version>` does not exist.
+
+Then push a plain tag (lightweight or annotated) at that SHA: no admin bypass
+beyond the tag push itself, one provider per session, never move or delete a
+tag, never re-run a release workflow. Afterwards watch the release run to
+completion and verify every package (Go, npm, PyPI, NuGet, Maven and the
+Registry entry as applicable) is live at the version before moving the card to
+Published; note the result on the card. If a
+release job fails, report it and stop: engineering fixes forward, you do not
+retag. If any precondition fails, do not tag; note why on the card.
 
 ## Publisher PR conventions
 
@@ -171,9 +199,9 @@ GitHub identity, so read the body, not the review state.
 
 ## Breaking, removal, rename, upstream major, missing version.txt
 
-- **Breaking change**: `BREAKING:` entry; the Publisher waits for Engin's go,
-  then a minor bump. A breaking update of a published provider needs the card's
-  "Approved: breaking" line.
+- **Breaking change**: `BREAKING:` entry; below 1.0 no go is needed: a minor
+  bump, the card labelled `breaking`, the breaking changes listed on the card
+  and in the release notes. 1.0.0 stays Engin's decision.
 - **Upstream Terraform major bump (bridged)**: treat as breaking unless the bump
   PR shows no schema diff; the PR author writes the `BREAKING:` entry.
 - **Removing or renaming a mirrored provider in the monorepo**: not allowed for

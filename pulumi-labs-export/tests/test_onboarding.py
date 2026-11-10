@@ -11,14 +11,13 @@ def release_text(provider="modal"):
 
 
 class OnboardingTest(unittest.TestCase):
-    def test_every_issue_ends_with_note(self):
+    def test_every_issue_ends_with_footer(self):
         issues = onboarding.build_issues("modal", release_text())
         self.assertEqual(len(issues), 5)
         for it in issues:
-            self.assertTrue(it["body"].endswith(onboarding.NOTE), it["title"])
-            self.assertEqual(it["body"].splitlines()[-1],
-                             "Note: This is a stop gap until Workprentice has permissions to Linear. "
-                             "If you do have any questions or concerns, speak to @pose")
+            self.assertTrue(it["body"].endswith(onboarding.FOOTER), it["title"])
+            self.assertEqual(it["body"].splitlines()[-1], "\U0001f916 Autoregistry Publisher \u00b7 Workprentice")
+            self.assertNotIn("stop gap", it["body"])
 
     def test_names_come_from_workflow(self):
         issues = {i["title"]: i["body"] for i in onboarding.build_issues("better-uptime", release_text("better-uptime"))}
@@ -52,7 +51,12 @@ class OnboardingTest(unittest.TestCase):
 
     def test_dup_check_and_cli(self):
         t = "Onboard x: y"
-        self.assertEqual(onboarding.dup_check(t), 'gh issue list -R pulumi/platform-providers-team --state all --search "Onboard x: y in:title"')
+        dup = onboarding.dup_check(t)
+        self.assertIn("Linear team PVD", dup)
+        self.assertIn("'Onboard x: y'", dup)
+        self.assertIn('gh issue list -R pulumi/platform-providers-team --state all --search "Onboard x: y in:title"', dup)
+        self.assertEqual(onboarding.LINEAR_TEAM, "PVD")
+        self.assertFalse(hasattr(onboarding, "TICKET_REPO"))
         self.assertEqual(helpers.quiet(onboarding.main, ["--provider", "modal", "--json"]), 0)
         self.assertEqual(helpers.quiet(onboarding.main, ["--provider", "Bad"]), 1)
 

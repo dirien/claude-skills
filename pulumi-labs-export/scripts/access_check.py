@@ -82,7 +82,6 @@ def probe_commands(provider, tmpdir):
     url = n["repo_url"] + ".git"
     return [
         ["gh", "api", "/repos/pulumi/autoregistry"],
-        ["gh", "api", "/repos/pulumi/platform-providers-team"],
         ["gh", "api", "/repos/pulumi-labs/pulumi-" + provider],
         ["git", "-C", tmpdir, "init", "-q"],
         ["git", "-C", tmpdir, "-c", "user.name=access-probe", "-c", "user.email=access-probe@invalid.example",
@@ -104,12 +103,11 @@ def print_commands(provider, tmpdir=None, out=None, admin=False):
     for c in probe_commands(provider, tmpdir):
         print(shlex.join(c), file=out)
     print("# PASS rule: every command exits 0, and the push probe output contains no \"denied\" or \"403\".", file=out)
-    print("# Read the three gh api responses: the ticket repo must have has_issues true and archived false.", file=out)
     if admin:
         print("# Admin probe (repository setup only, not part of the PASS rule):", file=out)
         print(shlex.join(["gh", "api", admin_probe_endpoint(provider)]), file=out)
         print("# 200: this identity is an admin of the repo: set it up with `scripts/repo_setup.sh plan` (SKILL.md, \"Repository setup\").", file=out)
-        print("# 403 or 404: it is not, or the repo does not exist: use the issue path. If the third probe returned 404 (no repo),", file=out)
+        print("# 403 or 404: it is not, or the repo does not exist: use the issue path. If the second probe returned 404 (no repo),", file=out)
         print("# no read shows whether this identity may create it: the create call that `repo_setup.sh plan create` prints is that probe.", file=out)
 
 
@@ -185,23 +183,13 @@ def run_probes(provider, runner=run, admin=False):
     add("read monorepo", "GET " + ep, st, st == 200,
         "" if st == 200 else "no access to the private monorepo (404 on a private repo means no access, not a missing repo)")
 
-    ep = "/repos/pulumi/platform-providers-team"
-    st, body = gh_get(ep, runner)
-    ok = st == 200 and body.get("has_issues") is True and not body.get("archived")
-    detail = ""
-    if st != 200:
-        detail = "no access to the ticket repo"
-    elif not ok:
-        detail = "repo readable but issues are disabled or the repo is archived"
-    add("read ticket repo", "GET " + ep, st, ok, detail)
-
     ep = "/repos/pulumi-labs/pulumi-" + provider
     st, _ = gh_get(ep, runner)
     exists = st == 200
     detail = ""
     if st == 404:
         detail = ("target repo not found or not visible. Only through `repo_setup.sh plan create` (SKILL.md, \"Repository setup\") "
-                  "may you create it; otherwise file an issue on pulumi/platform-providers-team asking a pulumi-labs admin to "
+                  "may you create it; otherwise file a Linear PVD issue (SKILL.md, Ticketing) asking a pulumi-labs admin to "
                   "create %s and grant the Workprentice app push" % n["repo"])
     elif st != 200:
         detail = "unexpected status"
@@ -254,8 +242,7 @@ def main(argv=None):
     for r in results:
         print("%s  %-20s %s -> %s%s" % ("INFO" if r.get("info") else "PASS" if r["ok"] else "FAIL", r["name"], r["endpoint"], r["status"],
                                         ("\n      " + r["detail"]) if r["detail"] else ""))
-    print("NOTE  issue creation on pulumi/platform-providers-team is NOT probed: it cannot be done without creating an "
-          "issue. A 403 on the first real `gh issue create` is the failure; report it and stop.")
+    print("NOTE  Linear access (team PVD) is an agent tool, not a script check: the first Linear issue call is the test.")
     failed = [r for r in results if not r["ok"]]
     if failed:
         print("\naccess check FAILED. Stop, report the exact endpoint and status above, and note that credentials are fixed "

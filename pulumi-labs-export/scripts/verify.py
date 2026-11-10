@@ -549,6 +549,48 @@ def default_provider_steps(gate, schema, code_root, examples_root, bridged=False
          or [{"name": "examples+templates", "status": "PASS", "detail": "no read of the provider's credential config keys"}])
 
 
+def qa_manifest_step(gate, schema, mono, pdir):
+    """Record the `qa_manifest` step: lib/providers/<p>/qa.yaml lists exactly the schema's resources, functions and credentials.
+
+    Monorepo examples profile only. A provider without a qa.yaml, or a tree without tools/qa-manifest (a mirror), is a
+    SKIP: the repo-wide `qa-manifest` check in provider-metadata.yml enforces that the file exists. Failure keys are
+    `<p>:qa_manifest:resources/<token>`, `functions/<token>` or `credentials/<VAR>`.
+    """
+    sid, title = "qa_manifest", "qa.yaml lists every schema resource and function and exactly the credential env vars"
+    manifest = os.path.join(pdir, "qa.yaml")
+    tool = os.path.join(mono, "tools", "qa-manifest")
+    if not os.path.isfile(manifest):
+        return gate.add(sid, title, "SKIP", "no qa.yaml for this provider (the repo-wide qa-manifest check owns its presence)")
+    if not os.path.isfile(os.path.join(tool, "go.mod")):
+        return gate.add(sid, title, "SKIP", "tools/qa-manifest is not in this tree")
+    if schema is None:
+        return gate.add(sid, title, "FAIL", "no schema available to inspect", items=[
+            {"name": "schema", "path": "schema", "status": "FAIL", "detail": "no schema available to inspect"}])
+    fd, spath = tempfile.mkstemp(suffix=".json", prefix="qa-schema-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(schema, f)
+        env = dict(os.environ)
+        env.update(getattr(gate, "env", None) or {})
+        proc = subprocess.run(["go", "run", "./cmd/qa-manifest", "-schema", spath, "-manifest", manifest, "-json"],
+                              cwd=tool, env=env, capture_output=True, text=True, timeout=CMD_TIMEOUT)
+    finally:
+        os.unlink(spath)
+    try:
+        items = json.loads(proc.stdout)
+    except ValueError:
+        items = None
+    if not isinstance(items, list):
+        tail = (proc.stderr or proc.stdout or "")[-TAIL_CHARS:]
+        return gate.add(sid, title, "FAIL", "qa-manifest did not produce JSON (exit %d)\n%s" % (proc.returncode, tail), items=[
+            {"name": "qa-manifest", "path": "qa-manifest", "status": "FAIL", "detail": "tool error (exit %d)" % proc.returncode}])
+    for i in items:
+        i["path"] = i["name"]
+    bad = [i for i in items if i["status"] == "FAIL"]
+    gate.add(sid, title, "FAIL" if bad else "PASS",
+             "\n".join("%s: %s" % (i["name"], i.get("detail", "")) for i in bad[:20]), items=items)
+
+
 # ------------------------------------------------------------ Go SDK helpers
 
 def first_exported_symbol(sdk_dir):
@@ -1407,6 +1449,7 @@ def run_monorepo_examples(mono, provider, prefix, report_dir, keep=False):
         if has("yaml"):
             examples_gate.compile_yaml(gate, pdir, examples_gate.entries_of(entries, "yaml"), schema)
         default_provider_steps(gate, schema, mod, pdir, bridged)
+        qa_manifest_step(gate, schema, mono, pdir)
         return _end_examples(gate, mono, state, versions, started, report_dir, base, provider, entries)
     finally:
         if not keep:

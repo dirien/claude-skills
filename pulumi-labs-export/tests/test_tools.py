@@ -45,8 +45,8 @@ class AccessCheckTest(unittest.TestCase):
         self.assertTrue(all(r["ok"] for r in res), res)
         push = [c for c in calls if c[:2] == ["git", "push"]][0]
         self.assertEqual(push[2:], ["--dry-run", "https://github.com/pulumi-labs/pulumi-modal.git", "HEAD:refs/heads/access-probe"])
-        self.assertEqual([r["endpoint"] for r in res][:3], ["GET /repos/pulumi/autoregistry", "GET /repos/pulumi/platform-providers-team",
-                                                             "GET /repos/pulumi-labs/pulumi-modal"])
+        self.assertEqual([r["endpoint"] for r in res][:2], ["GET /repos/pulumi/autoregistry", "GET /repos/pulumi-labs/pulumi-modal"])
+        self.assertFalse([r for r in res if "platform-providers-team" in r["endpoint"]])
 
     def test_push_rejected_is_failure_and_redacted(self):
         res = access_check.run_probes("modal", self.fake(200, 1, []))
@@ -56,9 +56,9 @@ class AccessCheckTest(unittest.TestCase):
 
     def test_missing_repo(self):
         res = access_check.run_probes("modal", self.fake(404, 0, []))
-        self.assertFalse(res[2]["ok"])
-        self.assertEqual(res[2]["status"], 404)
-        self.assertEqual(res[3]["status"], "skipped")
+        self.assertFalse(res[1]["ok"])
+        self.assertEqual(res[1]["status"], 404)
+        self.assertEqual(res[2]["status"], "skipped")
 
     def test_admin_probe_is_informational(self):
         for admin_status, word in ((200, "yes"), (403, "no")):
@@ -67,11 +67,11 @@ class AccessCheckTest(unittest.TestCase):
                     return 0, "HTTP/2.0 %d x\r\n\r\n{}" % admin_status
                 return self.fake(200, 0, [])(cmd, cwd, env)
             res = access_check.run_probes("modal", runner, admin=True)
-            self.assertEqual(len(res), 5)
+            self.assertEqual(len(res), 4)
             self.assertEqual(res[-1]["endpoint"], "GET /repos/pulumi-labs/pulumi-modal/actions/permissions")
             self.assertTrue(res[-1]["ok"] and res[-1]["info"])
             self.assertTrue(res[-1]["detail"].startswith(word), res[-1])
-        self.assertEqual(len(access_check.run_probes("modal", self.fake(200, 0, []))), 4)
+        self.assertEqual(len(access_check.run_probes("modal", self.fake(200, 0, []))), 3)
 
     def test_admin_probe_skipped_for_a_missing_repo(self):
         calls = []
@@ -79,7 +79,7 @@ class AccessCheckTest(unittest.TestCase):
         self.assertEqual(res[-1]["status"], "skipped")
         self.assertIn("plan create", res[-1]["detail"])
         self.assertFalse([c for c in calls if c[-1].endswith("/actions/permissions")])
-        self.assertIn("repo_setup.sh plan create", res[2]["detail"])
+        self.assertIn("repo_setup.sh plan create", res[1]["detail"])
 
 
 class CredentialDetectionTest(unittest.TestCase):
@@ -89,15 +89,14 @@ class CredentialDetectionTest(unittest.TestCase):
         access_check.print_commands("modal", "/tmp/probe", buf)
         lines = buf.getvalue().splitlines()
         cmds = [shlex.split(l) for l in lines if not l.startswith("#")]
-        self.assertEqual(len(cmds), 6)
-        self.assertEqual([c[:3] for c in cmds[:3]], [["gh", "api", "/repos/pulumi/autoregistry"],
-                                                      ["gh", "api", "/repos/pulumi/platform-providers-team"],
+        self.assertEqual(len(cmds), 5)
+        self.assertEqual([c[:3] for c in cmds[:2]], [["gh", "api", "/repos/pulumi/autoregistry"],
                                                       ["gh", "api", "/repos/pulumi-labs/pulumi-modal"]])
-        for c in cmds[3:]:
+        for c in cmds[2:]:
             self.assertEqual(c[:3], ["git", "-C", "/tmp/probe"])
-        self.assertEqual(cmds[3][3:], ["init", "-q"])
-        self.assertIn("--allow-empty", cmds[4])
-        self.assertEqual(cmds[5][3:], ["push", "--dry-run", "https://github.com/pulumi-labs/pulumi-modal.git", "HEAD:refs/heads/access-probe"])
+        self.assertEqual(cmds[2][3:], ["init", "-q"])
+        self.assertIn("--allow-empty", cmds[3])
+        self.assertEqual(cmds[4][3:], ["push", "--dry-run", "https://github.com/pulumi-labs/pulumi-modal.git", "HEAD:refs/heads/access-probe"])
         for l in lines:
             if not l.startswith("#"):
                 self.assertNotRegex(l, r"[|;&]|\bcd\b")
@@ -111,8 +110,8 @@ class CredentialDetectionTest(unittest.TestCase):
         buf = io.StringIO()
         access_check.print_commands("modal", "/tmp/probe", buf, admin=True)
         cmds = [shlex.split(l) for l in buf.getvalue().splitlines() if not l.startswith("#")]
-        self.assertEqual(len(cmds), 7)
-        self.assertEqual(cmds[6], ["gh", "api", "/repos/pulumi-labs/pulumi-modal/actions/permissions"])
+        self.assertEqual(len(cmds), 6)
+        self.assertEqual(cmds[5], ["gh", "api", "/repos/pulumi-labs/pulumi-modal/actions/permissions"])
         self.assertIn("not part of the PASS rule", buf.getvalue())
 
     def test_print_commands_flag_runs_nothing(self):
